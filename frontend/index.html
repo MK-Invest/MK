@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StockLens</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #f5f5f2;
+    --surface: #ffffff;
+    --surface2: #f1efe8;
+    --text: #1a1a1a;
+    --text2: #666;
+    --border: rgba(0,0,0,0.12);
+    --border2: rgba(0,0,0,0.25);
+    --blue: #185FA5;
+    --blue-light: #E6F1FB;
+    --blue-mid: #B5D4F4;
+    --green: #3B6D11;
+    --green-light: #EAF3DE;
+    --red: #A32D2D;
+    --red-light: #FCEBEB;
+    --amber-light: #FAEEDA;
+    --amber: #854F0B;
+  }
+  body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Header */
+  header { background: var(--surface); border-bottom: 0.5px solid var(--border); padding: 14px 28px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
+  .logo { font-size: 20px; font-weight: 600; letter-spacing: -0.5px; }
+  .logo span { color: var(--blue); }
+  .search-wrap { display: flex; gap: 8px; flex: 1; max-width: 520px; margin-left: auto; }
+  .search-wrap input { flex: 1; padding: 9px 14px; border: 0.5px solid var(--border2); border-radius: 8px; font-size: 14px; background: var(--surface2); color: var(--text); outline: none; transition: all 0.15s; }
+  .search-wrap input:focus { border-color: var(--blue); background: var(--surface); box-shadow: 0 0 0 3px rgba(24,95,165,0.1); }
+  .search-wrap button { padding: 9px 20px; background: var(--blue); color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background 0.15s; white-space: nowrap; }
+  .search-wrap button:hover { background: #0C447C; }
+
+  /* Status bar */
+  #status-bar { display: none; padding: 8px 28px; font-size: 12px; background: var(--green-light); color: var(--green); border-bottom: 0.5px solid #C0DD97; }
+  #status-bar.error { background: var(--red-light); color: var(--red); border-color: #F7C1C1; }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 20px; }
+
+  /* Welcome */
+  .welcome { text-align: center; padding: 80px 20px; }
+  .welcome h2 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+  .welcome p { font-size: 15px; color: var(--text2); margin-bottom: 28px; }
+  .examples { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .ex-btn { padding: 8px 18px; border: 0.5px solid var(--border2); border-radius: 20px; background: var(--surface); font-size: 13px; cursor: pointer; color: var(--text2); transition: all 0.15s; }
+  .ex-btn:hover { background: var(--blue-light); color: var(--blue); border-color: var(--blue); }
+
+  /* Suggestions */
+  .suggestions { background: var(--surface); border: 0.5px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
+  .suggestions-header { padding: 12px 18px; font-size: 13px; color: var(--text2); border-bottom: 0.5px solid var(--border); }
+  .sug-item { padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.1s; border-bottom: 0.5px solid var(--border); }
+  .sug-item:last-child { border-bottom: none; }
+  .sug-item:hover { background: var(--surface2); }
+  .sug-ticker { font-weight: 600; color: var(--blue); margin-right: 10px; }
+  .sug-name { color: var(--text); font-size: 14px; }
+  .sug-exch { font-size: 12px; color: var(--text2); background: var(--surface2); padding: 3px 8px; border-radius: 10px; }
+
+  /* Company header */
+  .co-header { background: var(--surface); border: 0.5px solid var(--border); border-radius: 14px; padding: 22px 26px; margin-bottom: 18px; display: flex; align-items: flex-start; gap: 18px; }
+  .co-logo { width: 54px; height: 54px; border-radius: 12px; border: 0.5px solid var(--border); object-fit: contain; background: #fff; flex-shrink: 0; }
+  .co-logo-placeholder { width: 54px; height: 54px; border-radius: 12px; background: var(--blue-light); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 600; color: var(--blue); flex-shrink: 0; }
+  .co-info { flex: 1; min-width: 0; }
+  .co-name { font-size: 22px; font-weight: 600; margin-bottom: 5px; }
+  .co-meta { font-size: 13px; color: var(--text2); display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+  .co-meta span { display: flex; align-items: center; gap: 4px; }
+  .co-desc { font-size: 13px; color: var(--text2); line-height: 1.65; }
+  .co-price { text-align: right; flex-shrink: 0; }
+  .price-big { font-size: 30px; font-weight: 600; }
+  .price-change { font-size: 14px; margin-top: 3px; }
+  .mktcap { font-size: 12px; color: var(--text2); margin-top: 6px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+
+  /* Metrics */
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .metric { background: var(--surface2); border-radius: 10px; padding: 14px 16px; }
+  .metric-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 7px; }
+  .metric-val { font-size: 21px; font-weight: 600; }
+  .metric-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+
+  /* Charts */
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+  @media (max-width: 640px) { .charts { grid-template-columns: 1fr; } }
+  .chart-card { background: var(--surface); border: 0.5px solid var(--border); border-radius: 12px; padding: 20px; }
+  .chart-title { font-size: 13px; font-weight: 500; color: var(--text2); margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+  .chart-wrap { position: relative; height: 200px; }
+
+  /* Outlook */
+  .card { background: var(--surface); border: 0.5px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 18px; }
+  .card-title { font-size: 13px; font-weight: 500; color: var(--text2); margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
+  .analyst-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .analyst-item { background: var(--surface2); border-radius: 8px; padding: 14px; }
+  .analyst-label { font-size: 12px; color: var(--text2); margin-bottom: 5px; }
+  .analyst-val { font-size: 17px; font-weight: 600; }
+
+  /* Sector */
+  .sector-rows { display: flex; flex-direction: column; gap: 16px; }
+  .sector-row { display: flex; flex-direction: column; gap: 5px; }
+  .sector-row-label { font-size: 13px; color: var(--text2); display: flex; justify-content: space-between; }
+  .bar-track { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.7s ease; }
+  .bar-company { background: var(--blue); }
+  .bar-sector { background: var(--blue-mid); }
+
+  /* Loading / error */
+  .loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 80px; color: var(--text2); font-size: 15px; }
+  .spinner { width: 22px; height: 22px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.75s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-box { background: var(--red-light); border: 0.5px solid #F7C1C1; border-radius: 10px; padding: 16px 20px; color: var(--red); font-size: 14px; display: flex; align-items: center; gap: 10px; }
+  .info-box { background: var(--amber-light); border: 0.5px solid #FAC775; border-radius: 10px; padding: 12px 16px; color: var(--amber); font-size: 13px; margin-top: 14px; }
+
+  /* Valuační model */
+  .val-section { margin-bottom: 18px; }
+  .val-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  .val-title { font-size: 13px; font-weight: 500; color: var(--text2); display: flex; align-items: center; gap: 6px; }
+  .val-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .val-control { display: flex; flex-direction: column; gap: 3px; }
+  .val-control label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.04em; }
+  .val-control input { width: 80px; padding: 6px 9px; border: 0.5px solid var(--border2); border-radius: 7px; font-size: 13px; background: var(--surface2); color: var(--text); outline: none; text-align: right; }
+  .val-control input:focus { border-color: var(--blue); background: var(--surface); }
+  .val-run { padding: 7px 16px; background: var(--blue); color: #fff; border: none; border-radius: 7px; font-size: 13px; cursor: pointer; white-space: nowrap; align-self: flex-end; transition: background 0.15s; }
+  .val-run:hover { background: #0C447C; }
+  .val-run:disabled { background: #aaa; cursor: default; }
+
+  /* Parametry scénářů */
+  .scenario-inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 700px) { .scenario-inputs { grid-template-columns: 1fr; } }
+  .si-card { border-radius: 10px; padding: 14px 16px; border: 0.5px solid var(--border); }
+  .si-card.bear { background: #FFF5F5; border-color: #F7C1C1; }
+  .si-card.base { background: #F5F8FF; border-color: var(--blue-mid); }
+  .si-card.bull { background: #F2FAF0; border-color: #C0DD97; }
+  .si-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .si-card.bear .si-label { color: var(--red); }
+  .si-card.base .si-label { color: var(--blue); }
+  .si-card.bull .si-label { color: var(--green); }
+  .si-row { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+  .si-row:last-child { margin-bottom: 0; }
+  .si-row label { font-size: 11px; color: var(--text2); }
+  .si-row input { padding: 5px 8px; border: 0.5px solid var(--border2); border-radius: 6px; font-size: 13px; background: var(--surface); color: var(--text); outline: none; text-align: right; }
+  .si-row input:focus { border-color: var(--blue); }
+
+  /* Výsledková tabulka */
+  .val-table-wrap { overflow-x: auto; }
+  .val-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .val-table th { font-size: 11px; font-weight: 500; color: var(--text2); text-align: left; padding: 8px 12px; border-bottom: 0.5px solid var(--border); text-transform: uppercase; letter-spacing: 0.04em; }
+  .val-table th:not(:first-child) { text-align: right; }
+  .val-table td { padding: 10px 12px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
+  .val-table td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+  .val-table tr:last-child td { border-bottom: none; }
+  .val-table .row-highlight td { background: var(--surface2); font-weight: 600; }
+  .scenario-badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge-bear { background: #FCEBEB; color: var(--red); }
+  .badge-base { background: var(--blue-light); color: var(--blue); }
+  .badge-bull { background: var(--green-light); color: var(--green); }
+
+  /* Intrinsic value highlight karty */
+  .iv-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+  @media (max-width: 600px) { .iv-cards { grid-template-columns: 1fr; } }
+  .iv-card { border-radius: 12px; padding: 18px 20px; border: 0.5px solid var(--border); text-align: center; }
+  .iv-card.bear { background: #FFF5F5; border-color: #F7C1C1; }
+  .iv-card.base { background: var(--surface); border-color: var(--blue-mid); box-shadow: 0 2px 12px rgba(24,95,165,0.10); }
+  .iv-card.bull { background: #F2FAF0; border-color: #C0DD97; }
+  .iv-scenario { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .iv-card.bear .iv-scenario { color: var(--red); }
+  .iv-card.base .iv-scenario { color: var(--blue); }
+  .iv-card.bull .iv-scenario { color: var(--green); }
+  .iv-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  .iv-card.bear .iv-value { color: var(--red); }
+  .iv-card.base .iv-value { color: var(--blue); }
+  .iv-card.bull .iv-value { color: var(--green); }
+  .iv-upside { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .iv-sub { font-size: 12px; color: var(--text2); }
+  .up { color: var(--green); } .dn { color: var(--red); }
+
+  /* Rating badge */
+  .rating-wrap { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 12px 16px; border-radius: 10px; }
+  .rating-wrap.green { background: var(--green-light); border: 0.5px solid #C0DD97; }
+  .rating-wrap.amber { background: var(--amber-light); border: 0.5px solid #FAC775; }
+  .rating-wrap.red { background: var(--red-light); border: 0.5px solid #F7C1C1; }
+  .rating-badge { font-size: 14px; font-weight: 700; }
+  .rating-wrap.green .rating-badge { color: var(--green); }
+  .rating-wrap.amber .rating-badge { color: var(--amber); }
+  .rating-wrap.red .rating-badge { color: var(--red); }
+  .rating-desc { font-size: 13px; color: var(--text2); }
+
+  .val-loading { display: flex; align-items: center; gap: 8px; color: var(--text2); font-size: 13px; padding: 20px 0; }
+
+  /* Score badge */
+  .score-wrap { display: flex; align-items: center; gap: 14px; margin-top: 12px; padding: 12px 16px; background: var(--surface2); border-radius: 10px; border: 0.5px solid var(--border); flex-wrap: wrap; }
+  .score-ring { position: relative; width: 54px; height: 54px; flex-shrink: 0; }
+  .score-ring svg { transform: rotate(-90deg); }
+  .score-ring-num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; }
+  .score-info { flex: 1; }
+  .score-title { font-size: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .score-bars { display: flex; gap: 10px; flex-wrap: wrap; }
+  .score-bar-item { display: flex; flex-direction: column; gap: 3px; min-width: 100px; flex: 1; }
+  .score-bar-label { font-size: 11px; color: var(--text2); display: flex; justify-content: space-between; }
+  .score-bar-track { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .score-bar-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
+  .score-bar-upside { background: var(--blue); }
+  .score-bar-margin { background: var(--green); }
+  .score-bar-growth { background: var(--amber); }
+
+  /* Ratios karta */
+  .ratios-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .ratio-item { background: var(--surface2); border-radius: 8px; padding: 12px 14px; }
+  .ratio-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .ratio-val { font-size: 18px; font-weight: 600; }
+  .ratio-sub { font-size: 11px; color: var(--text2); margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div id="status-bar"></div>
+
+<header>
+  <div class="logo">Stock<span>Lens</span></div>
+  <div class="search-wrap">
+    <input type="text" id="q" placeholder="Ticker nebo název firmy... (AAPL, Tesla, NVDA)" onkeydown="if(event.key==='Enter')doSearch()" />
+    <button onclick="doSearch()"><i class="ti ti-search"></i> Hledat</button>
+  </div>
+</header>
+
+<main id="main">
+  <div class="welcome">
+    <h2>Analýza burzovních firem</h2>
+    <p>Zadej ticker nebo název firmy a získej kompletní finanční přehled.</p>
+    <div class="examples">
+      <button class="ex-btn" onclick="qs('AAPL')">AAPL — Apple</button>
+      <button class="ex-btn" onclick="qs('MSFT')">MSFT — Microsoft</button>
+      <button class="ex-btn" onclick="qs('TSLA')">TSLA — Tesla</button>
+      <button class="ex-btn" onclick="qs('NVDA')">NVDA — Nvidia</button>
+      <button class="ex-btn" onclick="qs('AMZN')">AMZN — Amazon</button>
+      <button class="ex-btn" onclick="qs('CEZ.PR')">ČEZ</button>
+    </div>
+  </div>
+</main>
+
+<script>
+const API = 'http://localhost:8000';
+let revChart, epsChart;
+
+async function checkBackend() {
+  try {
+    const r = await fetch(`${API}/health`);
+    const d = await r.json();
+    const bar = document.getElementById('status-bar');
+    bar.style.display = 'block';
+    if (d.api_key_set) {
+      bar.textContent = '✓ Backend běží a FMP API klíč je nastaven';
+      bar.className = '';
+    } else {
+      bar.textContent = '⚠ Backend běží, ale FMP API klíč není nastaven v .env souboru';
+      bar.className = 'error';
+    }
+  } catch {
+    const bar = document.getElementById('status-bar');
+    bar.style.display = 'block';
+    bar.textContent = '✗ Backend neběží — spusť: uvicorn main:app --reload (v adresáři backend/)';
+    bar.className = 'error';
+  }
+}
+
+function qs(t) { document.getElementById('q').value = t; doSearch(); }
+function loading() { document.getElementById('main').innerHTML = '<div class="loading"><div class="spinner"></div> Načítám data...</div>'; }
+function err(msg) { document.getElementById('main').innerHTML = `<div class="error-box"><i class="ti ti-alert-circle" style="font-size:18px"></i>${msg}</div>`; }
+
+async function doSearch() {
+  const query = document.getElementById('q').value.trim();
+  if (!query) return;
+  loading();
+  try {
+    // Přímý ticker — max 5 znaků, velká písmena nebo tečka
+    if (/^[A-Z0-9.]{1,6}$/.test(query.toUpperCase())) {
+      await loadCompany(query.toUpperCase());
+    } else {
+      const r = await fetch(`${API}/search?query=${encodeURIComponent(query)}`);
+      const data = await r.json();
+      if (!data || data.length === 0) { err('Žádné výsledky.'); return; }
+      if (data.length === 1) { await loadCompany(data[0].symbol); return; }
+      showSuggestions(data);
+    }
+  } catch(e) {
+    console.error('doSearch error:', e); err('Nelze se připojit k backendu: ' + (e.message || e));
+  }
+}
+
+function showSuggestions(data) {
+  const items = data.map(d => `
+    <div class="sug-item" onclick="loadCompany('${d.symbol}')">
+      <div><span class="sug-ticker">${d.symbol}</span><span class="sug-name">${d.name || ''}</span></div>
+      <span class="sug-exch">${d.exchangeShortName || ''}</span>
+    </div>`).join('');
+  document.getElementById('main').innerHTML = `
+    <div class="suggestions">
+      <div class="suggestions-header">Nalezené firmy — vyber jednu:</div>
+      ${items}
+    </div>`;
+}
+
+async function loadCompany(ticker) {
+  document.getElementById('q').value = ticker;
+  loading();
+  try {
+    const r = await fetch(`${API}/company/${ticker}`);
+    if (!r.ok) { err('Firma nenalezena nebo chyba API.'); return; }
+    const data = await r.json();
+    render(data, ticker);
+  } catch(e) {
+    console.error('loadCompany error:', e); err('Chyba: ' + (e.message || e));
+  }
+}
+
+function fmt(n) {
+  if (n == null || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e12) return (n/1e12).toFixed(2) + ' T';
+  if (abs >= 1e9)  return (n/1e9).toFixed(2) + ' B';
+  if (abs >= 1e6)  return (n/1e6).toFixed(2) + ' M';
+  return n.toLocaleString('cs-CZ');
+}
+function p2(n) { return n != null && !isNaN(n) ? n.toFixed(2) : '—'; }
+function pct(n) { return n != null && !isNaN(n) ? (n*100).toFixed(1) + ' %' : '—'; }
+
+function render({ profile: p, income, estimates, ratios }, ticker) {
+  if (!p || !p.symbol) { err('Data firmy nejsou dostupná.'); return; }
+
+  // Nové FMP stable API má jiné názvy polí než staré v3
+  const change = p.change ?? p.changes ?? 0;
+  const changePct = p.changePercentage ?? p.changesPercentage ?? 0;
+  const mktCap = p.marketCap ?? p.mktCap;
+  const lastDiv = p.lastDividend ?? p.lastDiv;
+
+  const chgCls = change >= 0 ? 'pos' : 'neg';
+  const chgSign = change >= 0 ? '+' : '';
+  const initials = (p.symbol||'').substring(0, 2);
+  const logoHtml = p.image
+    ? `<img class="co-logo" src="${p.image}" alt="${p.companyName}" onerror="this.outerHTML='<div class=co-logo-placeholder>${initials}</div>'">`
+    : `<div class="co-logo-placeholder">${initials}</div>`;
+
+  const years = (income || []).slice(0, 3).reverse();
+  const yearLabels = years.map(y => y.fiscalYear || y.calendarYear || (y.date||'').substring(0,4));
+  const revenues = years.map(y => y.revenue);
+  const epsArr = years.map(y => y.epsDiluted ?? y.epsdiluted);
+  const netIncomes = years.map(y => y.netIncome);
+
+  // EPS a PE nejsou v novém profile endpointu — počítáme z income statementu
+  const latestIncome = income && income.length > 0 ? income[0] : null;
+  const eps = latestIncome ? (latestIncome.epsDiluted ?? latestIncome.epsdiluted) : null;
+  const pe = (eps && eps !== 0 && p.price) ? p.price / eps : null;
+
+  const revGrowth = revenues.length >= 2
+    ? ((revenues[revenues.length-1] - revenues[0]) / Math.abs(revenues[0])) / Math.max(revenues.length - 1, 1)
+    : null;
+
+  const est = estimates && estimates.length > 0 ? estimates[0] : null;
+  const sectorAvgGrowth = 0.09; // 9 % — bude nahrazeno živými daty
+
+  document.getElementById('main').innerHTML = `
+    <div class="co-header">
+      ${logoHtml}
+      <div class="co-info">
+        <div class="co-name">${p.companyName || p.symbol}</div>
+        <div class="co-meta">
+          <span><i class="ti ti-ticket" style="font-size:14px"></i> ${p.symbol}</span>
+          <span><i class="ti ti-building" style="font-size:14px"></i> ${p.sector || '—'}</span>
+          <span><i class="ti ti-sitemap" style="font-size:14px"></i> ${p.industry || '—'}</span>
+          <span><i class="ti ti-map-pin" style="font-size:14px"></i> ${p.country || '—'}</span>
+          <span><i class="ti ti-chart-bar" style="font-size:14px"></i> ${p.exchange || p.exchangeFullName || '—'}</span>
+        </div>
+        <div class="co-desc">${(p.description||'').substring(0, 260)}${(p.description||'').length > 260 ? '…' : ''}</div>
+      </div>
+      <div class="co-price">
+        <div class="price-big">$${p2(p.price)}</div>
+        <div class="price-change ${chgCls}">${chgSign}${p2(change)} (${chgSign}${p2(changePct)} %)</div>
+        <div class="mktcap">Tržní kap.: $${fmt(mktCap)}</div>
+        <div class="mktcap">Zaměstnanců: ${p.fullTimeEmployees ? Number(p.fullTimeEmployees).toLocaleString('cs-CZ') : '—'}</div>
+      </div>
+    </div>
+
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">P/E ratio</div>
+        <div class="metric-val">${p2(pe)}</div>
+        <div class="metric-sub">Price / Earnings</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">EPS (FY)</div>
+        <div class="metric-val">${eps != null ? '$'+p2(eps) : '—'}</div>
+        <div class="metric-sub">Earnings per share (zředěný)</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">52W rozsah</div>
+        <div class="metric-val" style="font-size:15px">${p.range || '—'}</div>
+        <div class="metric-sub">52týdenní min–max</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Beta</div>
+        <div class="metric-val">${p2(p.beta)}</div>
+        <div class="metric-sub">Volatilita vs. trh</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Dividenda</div>
+        <div class="metric-val">${lastDiv ? '$'+p2(lastDiv) : '—'}</div>
+        <div class="metric-sub">Poslední dividenda</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">DCF hodnota</div>
+        <div class="metric-val">${p.dcf ? '$'+p2(p.dcf) : '—'}</div>
+        <div class="metric-sub">${p.dcf && p.price ? (p.dcf > p.price ? "&#x1F4C8; Podhodnocená" : "&#x1F4C9; Nadhodnocená") : "DCF odhad"}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Hrubý zisk</div>
+        <div class="metric-val">${latestIncome ? '$'+fmt(latestIncome.grossProfit) : '—'}</div>
+        <div class="metric-sub">Gross profit (FY)</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Tržby</div>
+        <div class="metric-val">${latestIncome ? '$'+fmt(latestIncome.revenue) : '—'}</div>
+        <div class="metric-sub">Revenue (FY)</div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="chart-card">
+        <div class="chart-title"><i class="ti ti-currency-dollar"></i> Tržby — ${yearLabels.join(', ')}</div>
+        <div class="chart-wrap"><canvas id="rev-chart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title"><i class="ti ti-chart-line"></i> EPS zředěný — ${yearLabels.join(', ')}</div>
+        <div class="chart-wrap"><canvas id="eps-chart"></canvas></div>
+      </div>
+    </div>
+
+    ${est ? `
+    <div class="card">
+      <div class="card-title"><i class="ti ti-telescope"></i> Výhled analytiků — příští rok (${est.date?.substring(0,4) || ''})</div>
+      <div class="analyst-grid">
+        <div class="analyst-item">
+          <div class="analyst-label">Odhadované tržby</div>
+          <div class="analyst-val">$${fmt(est.estimatedRevenueAvg)}</div>
+        </div>
+        <div class="analyst-item">
+          <div class="analyst-label">Odhadovaný EPS</div>
+          <div class="analyst-val">${est.estimatedEpsAvg != null ? '$'+p2(est.estimatedEpsAvg) : '—'}</div>
+        </div>
+        <div class="analyst-item">
+          <div class="analyst-label">Odhadovaný čistý zisk</div>
+          <div class="analyst-val">$${fmt(est.estimatedNetIncomeAvg)}</div>
+        </div>
+        <div class="analyst-item">
+          <div class="analyst-label">Odhadované EBITDA</div>
+          <div class="analyst-val">$${fmt(est.estimatedEbitdaAvg)}</div>
+        </div>
+      </div>
+    </div>` : ''}
+
+    <div class="card" id="ratios-card" style="display:none">
+      <div class="card-title"><i class="ti ti-report-analytics"></i> TTM ukazatele (ratios)</div>
+      <div class="ratios-grid" id="ratios-grid"></div>
+    </div>
+
+    ${revGrowth !== null ? `
+    <div class="card">
+      <div class="card-title"><i class="ti ti-chart-arrows"></i> Průměrný roční růst tržeb — firma vs. sektor</div>
+      <div class="sector-rows">
+        <div class="sector-row">
+          <div class="sector-row-label">
+            <span>${p.companyName} (CAGR)</span>
+            <span class="${revGrowth >= 0 ? 'pos' : 'neg'}" style="font-weight:600">${(revGrowth*100).toFixed(1)} % / rok</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill bar-company" style="width:${Math.min(100, Math.abs(revGrowth)*500)}%"></div></div>
+        </div>
+        <div class="sector-row">
+          <div class="sector-row-label">
+            <span>Průměr sektoru (${p.sector || 'S&P 500'})</span>
+            <span style="color:var(--text2); font-weight:600">~${(sectorAvgGrowth*100).toFixed(0)} % / rok</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill bar-sector" style="width:${Math.min(100, sectorAvgGrowth*500)}%"></div></div>
+        </div>
+      </div>
+      <div class="info-box">
+        <i class="ti ti-info-circle"></i>
+        ${revGrowth > sectorAvgGrowth
+          ? `✅ ${p.companyName} roste <strong>nad průměrem sektoru</strong> o ${((revGrowth - sectorAvgGrowth)*100).toFixed(1)} p.b.`
+          : `⚠️ ${p.companyName} roste <strong>pod průměrem sektoru</strong> o ${((sectorAvgGrowth - revGrowth)*100).toFixed(1)} p.b.`}
+        <br><small>Průměr sektoru je orientační — v další verzi načítáme přímo z FMP.</small>
+      </div>
+    </div>` : ''}
+  `;
+
+  // Grafy
+  setTimeout(() => {
+    const gc = { color: 'rgba(0,0,0,0.07)' };
+    const tc = { color: '#999', font: { size: 12 } };
+
+    const revCtx = document.getElementById('rev-chart');
+    if (revCtx) {
+      if (revChart) revChart.destroy();
+      revChart = new Chart(revCtx, {
+        type: 'bar',
+        data: { labels: yearLabels, datasets: [{ data: revenues, backgroundColor: '#B5D4F4', borderColor: '#185FA5', borderWidth: 1.5, borderRadius: 5 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { x: { grid: gc, ticks: tc }, y: { grid: gc, ticks: { ...tc, callback: v => fmt(v) } } } }
+      });
+    }
+
+    const epsCtx = document.getElementById('eps-chart');
+    if (epsCtx) {
+      if (epsChart) epsChart.destroy();
+      epsChart = new Chart(epsCtx, {
+        type: 'line',
+        data: { labels: yearLabels, datasets: [{ data: epsArr, borderColor: '#185FA5', backgroundColor: 'rgba(24,95,165,0.08)', borderWidth: 2, pointRadius: 5, pointBackgroundColor: '#185FA5', tension: 0.3, fill: true }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { x: { grid: gc, ticks: tc }, y: { grid: gc, ticks: { ...tc, callback: v => '$' + v.toFixed(2) } } } }
+      });
+    }
+  }, 80);
+
+  // --- Ratios karta ---
+  renderRatios(ratios, latestIncome, p);
+
+  // --- Live sector data ---
+  loadSectorData(p.sector);
+
+  // Valuační model — přidej kontejner a spusť s defaultními parametry
+  const valEl = document.createElement('div');
+  valEl.id = 'val-section';
+  document.getElementById('main').appendChild(valEl);
+  loadValuation(ticker);
+}
+
+function renderRatios(ratios, latestIncome, profile) {
+  const card = document.getElementById('ratios-card');
+  const grid = document.getElementById('ratios-grid');
+  if (!card || !grid) return;
+
+  const r = ratios || {};
+  const inc = latestIncome || {};
+  const p = profile || {};
+
+  // Pomocné formátovací funkce
+  const fxRatio = v => (v != null && !isNaN(v)) ? parseFloat(v).toFixed(2) + '×' : '—';
+  const fxPct   = v => (v != null && !isNaN(v)) ? (parseFloat(v) * 100).toFixed(1) + ' %' : '—';
+  const fxPct1  = v => (v != null && !isNaN(v)) ? parseFloat(v).toFixed(1) + ' %' : '—'; // už v %
+
+  // Sbíráme hodnoty z ratios TTM i jako fallback z income/profile
+  const evEbitda   = r.enterpriseValueMultipleTTM ?? r.evToEbitdaTTM;
+  const ps         = r.priceToSalesRatioTTM ?? r.psTTM;
+  const pb         = r.priceToBookRatioTTM  ?? r.pbTTM;
+  const roe        = r.returnOnEquityTTM;
+  const roa        = r.returnOnAssetsTTM;
+  const netMargin  = r.netProfitMarginTTM   ?? (inc.netIncome && inc.revenue ? inc.netIncome / inc.revenue : null);
+  const debtEq     = r.debtEquityRatioTTM   ?? r.debtToEquityTTM;
+  const currentR   = r.currentRatioTTM;
+  const opMargin   = r.operatingProfitMarginTTM ?? (inc.operatingIncome && inc.revenue ? inc.operatingIncome / inc.revenue : null);
+  const grossMarg  = r.grossProfitMarginTTM ?? (inc.grossProfit && inc.revenue ? inc.grossProfit / inc.revenue : null);
+  const divYield   = r.dividendYieldTTM;
+  const payoutR    = r.payoutRatioTTM;
+
+  const items = [
+    { label: 'EV/EBITDA',      val: fxRatio(evEbitda),  sub: 'Valuační múltiple' },
+    { label: 'P/S (TTM)',       val: fxRatio(ps),        sub: 'Cena / Tržby' },
+    { label: 'P/B (TTM)',       val: fxRatio(pb),        sub: 'Cena / Účetní hodnota' },
+    { label: 'ROE',             val: fxPct(roe),         sub: 'Rentabilita vl. kapitálu' },
+    { label: 'ROA',             val: fxPct(roa),         sub: 'Rentabilita aktiv' },
+    { label: 'Provozní marže',  val: fxPct(opMargin),    sub: 'Operating margin' },
+    { label: 'Hrubá marže',     val: fxPct(grossMarg),   sub: 'Gross margin' },
+    { label: 'Čistá marže',     val: fxPct(netMargin),   sub: 'Net profit margin' },
+    { label: 'Debt/Equity',     val: fxRatio(debtEq),    sub: 'Zadluženost' },
+    { label: 'Current ratio',   val: fxRatio(currentR),  sub: 'Likvidita' },
+    { label: 'Div. výnos',      val: divYield != null ? fxPct(divYield) : '—', sub: 'Dividendový výnos' },
+    { label: 'Payout ratio',    val: payoutR  != null ? fxPct(payoutR)  : '—', sub: 'Podíl vyplaceného zisku' },
+  ].filter(i => i.val !== '—');
+
+  if (items.length === 0) return;
+
+  grid.innerHTML = items.map(i =>
+    `<div class="ratio-item">
+      <div class="ratio-label">${i.label}</div>
+      <div class="ratio-val">${i.val}</div>
+      <div class="ratio-sub">${i.sub}</div>
+    </div>`
+  ).join('');
+
+  card.style.display = '';
+}
+
+async function loadSectorData(companySector) {
+  try {
+    const r = await fetch(`${API}/sector`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    // Najdeme sektor firmy v datech
+    const normalize = s => (s || '').toLowerCase().replace(/[^a-z]/g, '');
+    const match = data.find(d => normalize(d.sector) === normalize(companySector));
+    const liveGrowth = match
+      ? parseFloat(match.changesPercentage ?? match.changePercentage ?? 0) / 100
+      : null;
+
+    // Aktualizujeme bar-sector, pokud existuje v DOM
+    const bars = document.querySelectorAll('.bar-fill.bar-sector');
+    const labels = document.querySelectorAll('.sector-row-label');
+    if (bars.length === 0 || liveGrowth === null) return;
+
+    bars.forEach(bar => {
+      bar.style.width = Math.min(100, Math.abs(liveGrowth) * 500) + '%';
+    });
+    labels.forEach(label => {
+      const spans = label.querySelectorAll('span');
+      if (spans.length >= 2) {
+        spans[1].textContent = (liveGrowth >= 0 ? '+' : '') + (liveGrowth * 100).toFixed(1) + ' % / rok';
+      }
+    });
+
+    // Aktualizuj info-box text
+    const infoBoxes = document.querySelectorAll('.info-box');
+    infoBoxes.forEach(box => {
+      const compBar = box.closest('.card')?.querySelector('.bar-fill.bar-company');
+      const compLabel = box.closest('.card')?.querySelectorAll('.sector-row-label span');
+      if (!compLabel || compLabel.length < 2) return;
+      const compGrowthTxt = compLabel[1]?.textContent || '';
+      const compGrowth = parseFloat(compGrowthTxt) / 100;
+      if (isNaN(compGrowth)) return;
+
+      const diff = ((compGrowth - liveGrowth) * 100).toFixed(1);
+      const absDiff = Math.abs(diff);
+      const sectorLabel = match ? match.sector : (companySector || 'S&P 500');
+      if (compGrowth > liveGrowth) {
+        box.innerHTML = `<i class="ti ti-info-circle"></i> ✅ Firma roste <strong>nad průměrem sektoru (${sectorLabel})</strong> o ${absDiff} p.b.<br><small>Data sektoru: živá data z FMP.</small>`;
+      } else {
+        box.innerHTML = `<i class="ti ti-info-circle"></i> ⚠️ Firma roste <strong>pod průměrem sektoru (${sectorLabel})</strong> o ${absDiff} p.b.<br><small>Data sektoru: živá data z FMP.</small>`;
+      }
+    });
+  } catch(e) {
+    console.warn('Sector data error:', e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Valuační model
+// ---------------------------------------------------------------------------
+
+let _currentTicker = null;
+
+async function loadValuation(ticker, customParams) {
+  _currentTicker = ticker;
+  const el = document.getElementById('val-section');
+  if (!el) return;
+
+  const body = customParams || buildValBody();
+
+  el.innerHTML = '<div class="card" style="margin-bottom:18px"><div class="val-header"><div class="val-title"><i class="ti ti-calculator"></i> Valuační model — Bear / Base / Bull</div></div><div class="val-loading"><div class="spinner"></div> Počítám scénáře...</div></div>';
+
+  try {
+    const r = await fetch(API + '/valuation/' + ticker, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      el.innerHTML = '<div class="error-box" style="margin-top:12px"><i class="ti ti-alert-circle"></i> Nepodařilo se načíst valuaci.</div>';
+      return;
+    }
+    const data = await r.json();
+    renderValuation(data);
+  } catch(e) {
+    console.error('loadValuation error:', e);
+    el.innerHTML = '<div class="error-box" style="margin-top:12px"><i class="ti ti-alert-circle"></i> ' + e.message + '</div>';
+  }
+}
+
+function buildValBody() {
+  function gf(id) { var el = document.getElementById(id); return el ? parseFloat(el.value) : null; }
+  function gi(id) { var el = document.getElementById(id); return el ? parseInt(el.value) : null; }
+  var reqReturn = gf('v-req-return');
+  var years = gi('v-years');
+  var body = {
+    required_return: reqReturn !== null ? reqReturn / 100 : 0.12,
+    years: years !== null ? years : 2,
+  };
+  var bearCagr = gf('v-bear-cagr'); var bearMargin = gf('v-bear-margin'); var bearEv = gf('v-bear-ev');
+  var baseCagr = gf('v-base-cagr'); var baseMargin = gf('v-base-margin'); var baseEv = gf('v-base-ev');
+  var bullCagr = gf('v-bull-cagr'); var bullMargin = gf('v-bull-margin'); var bullEv = gf('v-bull-ev');
+  if (bearCagr !== null) body.bear = { revenue_cagr: bearCagr / 100, ebitda_margin: bearMargin / 100, ev_ebitda_multiple: bearEv };
+  if (baseCagr !== null) body.base = { revenue_cagr: baseCagr / 100, ebitda_margin: baseMargin / 100, ev_ebitda_multiple: baseEv };
+  if (bullCagr !== null) body.bull = { revenue_cagr: bullCagr / 100, ebitda_margin: bullMargin / 100, ev_ebitda_multiple: bullEv };
+  return body;
+}
+
+function upCls(u) { return u >= 0 ? 'up' : 'dn'; }
+function upSign(u) { return u >= 0 ? '+' : ''; }
+function upStr(u) { return upSign(u) + (u * 100).toFixed(1) + ' %'; }
+
+function renderValuation(d) {
+  var el = document.getElementById('val-section');
+  if (!el) return;
+
+  var s = d.scenarios;
+  var h = d.historical;
+  var price = d.price;
+
+  // Score badge — composite score (40 % upside, 30 % marže, 30 % růst)
+  var baseUpside = s.base.upside;          // může být záporné
+  var baseMargin = s.base.ebitda_margin;   // 0–1
+  var baseGrowth = s.base.revenue_cagr;    // 0–1+
+
+  // Normalizujeme do 0–1 pro skóre (upside -50%→0, +50%→1)
+  var normUpside = Math.max(0, Math.min(1, (baseUpside + 0.5) / 1.0));
+  var normMargin = Math.max(0, Math.min(1, baseMargin / 0.5));
+  var normGrowth = Math.max(0, Math.min(1, (baseGrowth + 0.05) / 0.35));
+  var score = Math.round((normUpside * 40 + normMargin * 30 + normGrowth * 30));
+
+  // Barva kruhu podle skóre
+  var scoreColor = score >= 70 ? 'var(--green)' : score >= 45 ? 'var(--amber)' : 'var(--red)';
+  var scoreTextColor = score >= 70 ? 'var(--green)' : score >= 45 ? 'var(--amber)' : 'var(--red)';
+
+  // SVG kruh
+  var circleR = 22; var circleC = 2 * Math.PI * circleR;
+  var circleDash = ((score / 100) * circleC).toFixed(1);
+
+  var scoreHtml =
+    '<div class="score-wrap">' +
+      '<div class="score-ring">' +
+        '<svg width="54" height="54" viewBox="0 0 54 54">' +
+          '<circle cx="27" cy="27" r="' + circleR + '" fill="none" stroke="var(--border)" stroke-width="5"/>' +
+          '<circle cx="27" cy="27" r="' + circleR + '" fill="none" stroke="' + scoreColor + '" stroke-width="5"' +
+            ' stroke-dasharray="' + circleDash + ' ' + circleC.toFixed(1) + '"' +
+            ' stroke-linecap="round"/>' +
+        '</svg>' +
+        '<div class="score-ring-num" style="color:' + scoreTextColor + '">' + score + '</div>' +
+      '</div>' +
+      '<div class="score-info">' +
+        '<div class="score-title">Composite Score (0–100)</div>' +
+        '<div class="score-bars">' +
+          '<div class="score-bar-item">' +
+            '<div class="score-bar-label"><span>Upside (40 %)</span><span>' + (baseUpside >= 0 ? '+' : '') + (baseUpside * 100).toFixed(1) + ' %</span></div>' +
+            '<div class="score-bar-track"><div class="score-bar-fill score-bar-upside" style="width:' + (normUpside * 100).toFixed(0) + '%"></div></div>' +
+          '</div>' +
+          '<div class="score-bar-item">' +
+            '<div class="score-bar-label"><span>EBITDA marže (30 %)</span><span>' + (baseMargin * 100).toFixed(1) + ' %</span></div>' +
+            '<div class="score-bar-track"><div class="score-bar-fill score-bar-margin" style="width:' + (normMargin * 100).toFixed(0) + '%"></div></div>' +
+          '</div>' +
+          '<div class="score-bar-item">' +
+            '<div class="score-bar-label"><span>Růst tržeb (30 %)</span><span>' + (baseGrowth >= 0 ? '+' : '') + (baseGrowth * 100).toFixed(1) + ' %</span></div>' +
+            '<div class="score-bar-track"><div class="score-bar-fill score-bar-growth" style="width:' + (normGrowth * 100).toFixed(0) + '%"></div></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  // Rating
+  var rc = d.rating_color;
+  var ratingHtml = '<div class="rating-wrap ' + rc + '">' +
+    '<span class="rating-badge">' + d.rating + '</span>' +
+    '<span class="rating-desc">Hodnocení vychází z Base scénáře — vnitřní hodnota vs. aktuální cena $' + p2(price) + '</span>' +
+    '</div>';
+
+  // Tabulka řádky
+  function row(label, bv, sv, lv, fn) {
+    return '<tr><td style="color:var(--text2)">' + label + '</td><td>' + fn(bv) + '</td><td>' + fn(sv) + '</td><td>' + fn(lv) + '</td></tr>';
+  }
+  function pctStr(v) { return (v * 100).toFixed(1) + ' %'; }
+  function multStr(v) { return v.toFixed(1) + '\u00D7'; }
+
+  var tableRows =
+    row('Revenue CAGR', s.bear.revenue_cagr, s.base.revenue_cagr, s.bull.revenue_cagr, upStr) +
+    row('EBITDA marže', s.bear.ebitda_margin, s.base.ebitda_margin, s.bull.ebitda_margin, pctStr) +
+    row('EV/EBITDA multiple', s.bear.ev_ebitda_multiple, s.base.ev_ebitda_multiple, s.bull.ev_ebitda_multiple, multStr) +
+    row('Proj. tržby', s.bear.projected_revenue, s.base.projected_revenue, s.bull.projected_revenue, function(v){ return '$' + fmt(v); }) +
+    row('Proj. EBITDA', s.bear.projected_ebitda, s.base.projected_ebitda, s.bull.projected_ebitda, function(v){ return '$' + fmt(v); }) +
+    row('Exit EV', s.bear.exit_ev, s.base.exit_ev, s.bull.exit_ev, function(v){ return '$' + fmt(v); }) +
+    row('Exit cena / akcii', s.bear.exit_price_per_share, s.base.exit_price_per_share, s.bull.exit_price_per_share, function(v){ return '$' + p2(v); }) +
+    row('Req. CAGR z ceny', s.bear.required_cagr, s.base.required_cagr, s.bull.required_cagr, upStr);
+
+  // IV karty
+  function ivCard(name, sc) {
+    var uCls = upCls(sc.upside);
+    return '<div class="iv-card ' + name + '">' +
+      '<div class="iv-scenario">' + name.toUpperCase() + '</div>' +
+      '<div class="iv-value">$' + p2(sc.intrinsic_value) + '</div>' +
+      '<div class="iv-upside ' + uCls + '">' + upSign(sc.upside) + (sc.upside*100).toFixed(1) + ' % vs $' + p2(price) + '</div>' +
+      '<div class="iv-sub">Req. CAGR ' + upSign(sc.required_cagr) + (sc.required_cagr*100).toFixed(1) + ' %/rok</div>' +
+      '</div>';
+  }
+
+  // Scenario input cards
+  function siCard(name, sc) {
+    return '<div class="si-card ' + name + '">' +
+      '<div class="si-label">' + name.toUpperCase() + '</div>' +
+      '<div class="si-row"><label>Růst tržeb CAGR (%)</label>' +
+      '<input id="v-' + name + '-cagr" type="number" step="0.5" value="' + (sc.revenue_cagr*100).toFixed(1) + '"></div>' +
+      '<div class="si-row"><label>EBITDA marže (%)</label>' +
+      '<input id="v-' + name + '-margin" type="number" step="0.5" value="' + (sc.ebitda_margin*100).toFixed(1) + '"></div>' +
+      '<div class="si-row"><label>EV/EBITDA multiple</label>' +
+      '<input id="v-' + name + '-ev" type="number" step="0.5" value="' + sc.ev_ebitda_multiple.toFixed(1) + '"></div>' +
+      '</div>';
+  }
+
+  var histInfo = 'Hist. CAGR tržeb: <strong>' + (h.hist_cagr != null ? (h.hist_cagr*100).toFixed(1)+'%' : '—') + '</strong> &nbsp;|&nbsp; ' +
+    'Prům. EBITDA marže: <strong>' + (h.avg_ebitda_margin != null ? (h.avg_ebitda_margin*100).toFixed(1)+'%' : '—') + '</strong> &nbsp;|&nbsp; ' +
+    'EV/EBITDA (TTM): <strong>' + (h.ev_ebitda_ttm != null ? h.ev_ebitda_ttm+'×' : '—') + '</strong> &nbsp;|&nbsp; ' +
+    'Čistý dluh: <strong>$' + fmt(h.net_debt) + '</strong> &nbsp;|&nbsp; ' +
+    'Akcie: <strong>' + fmt(h.shares) + '</strong>';
+
+  el.innerHTML =
+    '<div class="card" style="margin-bottom:18px">' +
+      '<div class="val-header">' +
+        '<div class="val-title"><i class="ti ti-calculator"></i> Valuační model — Bear / Base / Bull (' + d.years + 'Y, disk. ' + (d.required_return*100).toFixed(0) + ' %)</div>' +
+        '<div class="val-controls">' +
+          '<div class="val-control"><label>Výnos / rok (%)</label>' +
+          '<input id="v-req-return" type="number" step="1" min="1" max="50" value="' + (d.required_return*100).toFixed(0) + '"></div>' +
+          '<div class="val-control"><label>Horizont (roky)</label>' +
+          '<input id="v-years" type="number" step="1" min="1" max="10" value="' + d.years + '"></div>' +
+          '<button class="val-run" onclick="loadValuation(_currentTicker, buildValBody())">' +
+          '<i class="ti ti-refresh"></i> Přepočítat</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="scenario-inputs">' + siCard('bear', s.bear) + siCard('base', s.base) + siCard('bull', s.bull) + '</div>' +
+      '<div class="iv-cards">' + ivCard('bear', s.bear) + ivCard('base', s.base) + ivCard('bull', s.bull) + '</div>' +
+      ratingHtml +
+      scoreHtml +
+      '<details style="margin-top:14px">' +
+        '<summary style="font-size:12px;color:var(--text2);cursor:pointer;padding:6px 0">&#9658; Detailní výpočet</summary>' +
+        '<div class="val-table-wrap" style="margin-top:10px">' +
+          '<table class="val-table"><thead><tr>' +
+            '<th>Ukazatel</th>' +
+            '<th><span class="scenario-badge badge-bear">Bear</span></th>' +
+            '<th><span class="scenario-badge badge-base">Base</span></th>' +
+            '<th><span class="scenario-badge badge-bull">Bull</span></th>' +
+          '</tr></thead><tbody>' + tableRows + '</tbody>' +
+          '<tfoot>' +
+            '<tr class="row-highlight">' +
+              '<td>&#11088; Vnitřní hodnota dnes</td>' +
+              '<td class="' + upCls(s.bear.upside) + '">$' + p2(s.bear.intrinsic_value) + '</td>' +
+              '<td class="' + upCls(s.base.upside) + '">$' + p2(s.base.intrinsic_value) + '</td>' +
+              '<td class="' + upCls(s.bull.upside) + '">$' + p2(s.bull.intrinsic_value) + '</td>' +
+            '</tr>' +
+            '<tr class="row-highlight">' +
+              '<td>Upside / Downside</td>' +
+              '<td class="' + upCls(s.bear.upside) + '">' + upStr(s.bear.upside) + '</td>' +
+              '<td class="' + upCls(s.base.upside) + '">' + upStr(s.base.upside) + '</td>' +
+              '<td class="' + upCls(s.bull.upside) + '">' + upStr(s.bull.upside) + '</td>' +
+            '</tr>' +
+          '</tfoot></table>' +
+        '</div>' +
+        '<div style="margin-top:10px;font-size:11px;color:var(--text2)">' + histInfo + '</div>' +
+      '</details>' +
+    '</div>';
+}
+
+// Zkontroluj backend při načtení
+checkBackend();
+
+</script>
+</body>
+</html>
