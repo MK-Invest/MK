@@ -150,31 +150,7 @@ async def yahoo_quote(client, ticker):
     except:
         return None
 
-async def yahoo_search(client, query):
-    if not query:
-        return []
 
-    data = await safe_get(
-        client,
-        "https://query1.finance.yahoo.com/v1/finance/search",
-        params={"q": query},
-    )
-
-    print("YAHOO SEARCH RESPONSE:", data)
-
-    if not data:
-        return []
-
-    quotes = data.get("quotes", [])
-
-    return [
-        {
-            "symbol": x.get("symbol"),
-            "name": x.get("shortname") or x.get("longname"),
-        }
-        for x in quotes
-        if x.get("symbol")
-    ]
 
 # -------------------------
 # TWELVE DATA (PRICE FALLBACK)
@@ -199,6 +175,41 @@ async def twelvedata_price(client, ticker):
         "confidence": 0.5,
     }
 
+async def yahoo_search(client, query):
+    if not query:
+        return []
+
+    data = await safe_get(
+        client,
+        "https://query1.finance.yahoo.com/v1/finance/search",
+        params={"q": query},
+    )
+
+    print("YAHOO SEARCH RESPONSE:", data)
+
+    if not data:
+        return []
+
+    quotes = data.get("quotes", [])
+
+    result = []
+
+    for x in quotes:
+
+        symbol = x.get("symbol")
+        if not symbol:
+            continue
+
+        result.append(
+            {
+                "symbol": symbol,
+                "name": x.get("shortname")
+                or x.get("longname")
+                or symbol,
+            }
+        )
+
+    return result
 
 # -------------------------
 # FMP (OPTIONAL ENRICHMENT ONLY)
