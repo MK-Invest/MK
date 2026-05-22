@@ -140,22 +140,26 @@ async def yahoo_quote(client, ticker):
 
 
 async def yahoo_search(client, query):
+    if not query:
+        return []
+
     data = await safe_get(
         client,
         "https://query1.finance.yahoo.com/v1/finance/search",
-        if not query:
-            return [],
+        params={"q": query},
     )
 
     if not data:
         return []
 
     return [
-        {"symbol": x.get("symbol"), "name": x.get("shortname")}
+        {
+            "symbol": x.get("symbol"),
+            "name": x.get("shortname") or x.get("longname"),
+        }
         for x in data.get("quotes", [])
         if x.get("symbol")
     ]
-
 
 # -------------------------
 # TWELVE DATA (PRICE FALLBACK)
