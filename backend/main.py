@@ -206,7 +206,7 @@ async def _fetch_valuation_data(client: httpx.AsyncClient, ticker: str) -> dict:
         return cached
 
     income, profile, balance = await asyncio.gather(
-        fmp(client, "/income-statement", {"symbol": ticker, "limit": 4}),
+        fmp(client, "/income-statement", {"symbol": ticker, "period": "quarter", "limit": 8}),
         fmp(client, "/profile", {"symbol": ticker}),
         fmp(client, "/balance-sheet-statement", {"symbol": ticker, "limit": 1}),
     )
@@ -288,7 +288,6 @@ async def _fetch_valuation_data(client: httpx.AsyncClient, ticker: str) -> dict:
     set_cache(ticker, data)
     return data
 
-
 # ---------------------------------------------------------------------------
 # Pydantic modely pro /valuation
 # ---------------------------------------------------------------------------
@@ -319,19 +318,52 @@ async def health():
 # Search
 # ---------------------------------------------------------------------------
 
+async def yahoo_search(client, query):
+    url = "https://query1.finance.yahoo.com/v1/finance/search"
+    params = {"q": query, "quotesCount": 8}
+
+    r = await client.get(url, params=params)
+    r.raise_for_status()
+    data = r.json()
+
+    return [
+        {
+            "symbol": q.get("symbol"),
+            "name": q.get("shortname"),
+            "exchangeShortName": q.get("exchange")
+        }
+        for q in data.get("quotes", [])
+        if q.get("symbol")
+    ]
+
+
 @app.get("/search")
 async def search(query: str):
     async with httpx.AsyncClient(timeout=15) as client:
         try:
-            data = await fmp(client, "/search-symbol", {"query": query, "limit": 8})
-            if not data:
-                data = await fmp(client, "/search-name", {"query": query, "limit": 8})
-            return data if isinstance(data, list) else []
+            fmp_data = await fmp(client, "/search-symbol", {"query": query, "limit": 8})
+            if not fmp_data:
+                fmp_data = await fmp(client, "/search-name", {"query": query, "limit": 8})
+            yahoo_data = []
+            try:
+                yahoo_data = await yahoo_search(client, query)
+            except:
+                pass
+            # merge bez duplicit
+            merged = {}
+
+            for x in fmp_data or []:
+                merged[x["symbol"]] = x
+
+            for x in yahoo_data:
+                if x["symbol"] not in merged:
+                    merged[x["symbol"]] = x
+
+            return list(merged.values())[:10]
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=502, detail=str(e))
-
 
 # ---------------------------------------------------------------------------
 # Company detail (profile + financials + estimates + ratios)
@@ -342,12 +374,14 @@ async def company(ticker: str):
     ticker = ticker.upper()
     async with httpx.AsyncClient(timeout=20) as client:
         try:
-            profile, income = await asyncio.gather(
+            profile, income, income_q, cashflow_q, balance_q = await asyncio.gather(
                 fmp(client, "/profile", {"symbol": ticker}),
                 fmp(client, "/income-statement", {"symbol": ticker, "limit": 4}),
+                fmp(client, "/income-statement", {"symbol": ticker, "period": "quarter", "limit": 6}),
+                fmp(client, "/cash-flow-statement", {"symbol": ticker, "period": "quarter", "limit": 6}),
+                fmp(client, "/balance-sheet-statement", {"symbol": ticker, "period": "quarter", "limit": 6}),
             )
 
-            prof = profile[0] if isinstance(profile, list) and profile else {}
             inc0 = income[0] if isinstance(income, list) and income else {}
 
             print("\n--- DEBUG ---")
@@ -357,7 +391,6 @@ async def company(ticker: str):
             print("SHARES profile:", prof.get("sharesOutstanding"))
             print("SHARES income:", inc0.get("weightedAverageShsOut"))
             print("----------------\n")
-
 
 # ------------------------------------
 # Debug
@@ -388,8 +421,10 @@ async def company(ticker: str):
                 "income": income if isinstance(income, list) else [],
                 "estimates": estimates if isinstance(estimates, list) else [],
                 "ratios": ratios,
+                "income_q": income_q if isinstance(income_q, list) else [],
+                "cashflow_q": cashflow_q if isinstance(cashflow_q, list) else [],
+                "balance_q": balance_q if isinstance(balance_q, list) else [],
             }
-
         except HTTPException:
             raise
         except Exception as e:

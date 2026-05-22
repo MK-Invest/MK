@@ -223,7 +223,7 @@
 <header>
   <div class="logo">Stock<span>Lens</span></div>
   <div class="search-wrap">
-    <input type="text" id="q" placeholder="Ticker nebo název firmy... (AAPL, Tesla, NVDA)" onkeydown="if(event.key==='Enter')doSearch()" />
+  <input type="text" id="q" placeholder="Ticker nebo název firmy..." onkeydown="if(event.key==='Enter')doSearch()" oninput="liveSearch(this.value)"/>
     <button onclick="doSearch()"><i class="ti ti-search"></i> Hledat</button>
   </div>
 </header>
@@ -285,11 +285,61 @@ async function doSearch() {
       const data = await r.json();
       if (!data || data.length === 0) { err('Žádné výsledky.'); return; }
       if (data.length === 1) { await loadCompany(data[0].symbol); return; }
+      
       showSuggestions(data);
     }
   } catch(e) {
     console.error('doSearch error:', e); err('Nelze se připojit k backendu: ' + (e.message || e));
   }
+}
+
+let lastQuery = '';
+let searchTimeout;
+
+async function liveSearch(query) {
+  clearTimeout(searchTimeout);
+
+
+if (!query || query.length < 2) {
+    const main = document.getElementById('main');
+
+    if (main && main.innerHTML.includes('suggestions')) {
+        main.innerHTML = `
+            <div class="welcome">
+                <h2>Analýza burzovních firem</h2>
+                <p>Zadej ticker nebo název firmy a získej kompletní finanční přehled.</p>
+            </div>
+        `;
+    }
+
+    return;
+}
+
+
+lastQuery = query;
+
+searchTimeout = setTimeout(async () => {
+  try {
+    const r = await fetch(`${API}/search?query=${encodeURIComponent(query)}`);
+    const data = await r.json();
+
+    if (query !== lastQuery) return; // ✅ KLÍČOVÉ
+
+    if (!data || data.length === 0) return;
+
+    // ochrana UI
+    const main = document.getElementById('main');
+    if (main && (
+        main.innerHTML.includes('welcome') ||
+        main.innerHTML.includes('suggestions')
+    )) {
+        showSuggestions(data);
+    }
+
+  } catch(e) {
+    console.warn('liveSearch error:', e);
+  }
+}, 250);
 }
 
 function showSuggestions(data) {
@@ -307,6 +357,7 @@ function showSuggestions(data) {
 
 async function loadCompany(ticker) {
   document.getElementById('q').value = ticker;
+  document.getElementById('main').innerHTML = '';
   loading();
   try {
     const r = await fetch(`${API}/company/${ticker}`);
@@ -329,7 +380,7 @@ function fmt(n) {
 function p2(n) { return n != null && !isNaN(n) ? n.toFixed(2) : '—'; }
 function pct(n) { return n != null && !isNaN(n) ? (n*100).toFixed(1) + ' %' : '—'; }
 
-function render({ profile: p, income, estimates, ratios }, ticker) {
+function render({ profile: p, income, estimates, ratios, income_q, cashflow_q, balance_q}, ticker) {
   if (!p || !p.symbol) { err('Data firmy nejsou dostupná.'); return; }
 
   // Nové FMP stable API má jiné názvy polí než staré v3
@@ -344,9 +395,9 @@ function render({ profile: p, income, estimates, ratios }, ticker) {
   const logoHtml = p.image
     ? `<img class="co-logo" src="${p.image}" alt="${p.companyName}" onerror="this.outerHTML='<div class=co-logo-placeholder>${initials}</div>'">`
     : `<div class="co-logo-placeholder">${initials}</div>`;
-
   const years = (income || []).slice(0, 3).reverse();
   const yearLabels = years.map(y => y.fiscalYear || y.calendarYear || (y.date||'').substring(0,4));
+  
   const revenues = years.map(y => y.revenue);
   const epsArr = years.map(y => y.epsDiluted ?? y.epsdiluted);
   const netIncomes = years.map(y => y.netIncome);
@@ -535,6 +586,127 @@ function render({ profile: p, income, estimates, ratios }, ticker) {
   valEl.id = 'val-section';
   document.getElementById('main').appendChild(valEl);
   loadValuation(ticker);
+
+  // ✅ kvartální grafy
+  const qEl = document.createElement('div');
+  qEl.id = 'quarter-section';
+  document.getElementById('main').appendChild(qEl);
+  renderQuarterCharts({ profile: p, income_q, cashflow_q, balance_q });
+}
+function renderQuarterCharts(data) {
+    const el = document.getElementById('quarter-section');
+    if (!el) return;
+
+    const income = (data.income_q || []).slice(0, 6).reverse();
+    const cash = (data.cashflow_q || []).slice(0, 6).reverse();
+    const bal = (data.balance_q || []).slice(0, 6).reverse();
+
+    if (income.length === 0) return;
+
+    const labels = income.map(q =>
+        `${q.period || ''} ${q.fiscalYear || ''}`
+    );
+
+    // ✅ EPS
+    const eps = income.map(q => q.epsDiluted ?? null);
+
+    // ✅ P/E (approx)
+    const pe = income.map(q => {
+        const epsv = q.epsDiluted;
+        return (epsv && data.profile.price) ? data.profile.price / epsv : null;
+    });
+
+    // ✅ Cash flow
+    const cashFlow = cash.map(q =>
+        q.operatingCashFlow ?? q.netCashProvidedByOperatingActivities ?? null
+    );
+
+    // ✅ Debt
+    const debt = bal.map(q =>
+        q.totalDebt ?? ((q.shortTermDebt || 0) + (q.longTermDebt || 0)) ?? null
+    );
+    const debtChange = debt.map((v, i, arr) => {
+        if (i === 0 || v == null || arr[i-1] == null) return 0;
+        return v - arr[i-1];
+    });
+    const colorize = arr => arr.map(v =>
+        v == null ? '#ccc' : (v >= 0 ? '#3B6D11' : '#A32D2D')
+    );
+
+    el.innerHTML = `
+        <div class="card">
+            <div class="card-title">
+                <i class="ti ti-chart-bar"></i> Kvartální metriky (6 kvartálů)
+            </div>
+
+            <div class="charts">
+                <div class="chart-card">
+                    <div class="chart-title">EPS</div>
+                    <div class="chart-wrap"><canvas id="q-eps"></canvas></div>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-title">P/E</div>
+                    <div class="chart-wrap"><canvas id="q-pe"></canvas></div>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-title">Cash Flow</div>
+                    <div class="chart-wrap"><canvas id="q-cf"></canvas></div>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-title">Debt</div>
+                    <div class="chart-wrap"><canvas id="q-debt"></canvas></div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    setTimeout(() => {
+        makeBar('q-eps', labels, eps, colorize(eps));
+        makeBar('q-pe', labels, pe, colorize(pe));
+        makeBar('q-cf', labels, cashFlow, colorize(cashFlow));
+        makeBar(
+            'q-debt',
+            labels,
+            debt,
+            debtChange.map(v => {
+                if (v == null) return '#ccc';
+                if (Math.abs(v) < 1e6) return '#aaa'; // malá změna
+                return v > 0 ? '#A32D2D' : '#3B6D11';
+            })
+    );
+    }, 80);
+}
+
+function makeBar(id, labels, data, colors) {
+    const ctx = document.getElementById(id);
+    if (!ctx) return;
+
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                data,
+                backgroundColor: colors,
+                borderRadius: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: {
+                    ticks: {
+                        callback: v => fmt(v)
+                    }
+                }
+            }
+        }
+    });
 }
 
 function renderRatios(ratios, latestIncome, profile) {
