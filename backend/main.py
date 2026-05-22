@@ -68,13 +68,25 @@ def set_cache(key, data):
 
 async def safe_get(client, url, params=None):
     try:
-        r = await client.get(url, params=params, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+            "Accept": "application/json,text/plain,*/*",
+        }
+
+        r = await client.get(
+            url,
+            params=params,
+            timeout=10,
+            headers=headers,
+        )
+
         if r.status_code != 200:
             return None
+
         return r.json()
+
     except:
         return None
-
 
 # =========================================================
 # PROVIDERS
