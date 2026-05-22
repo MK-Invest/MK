@@ -4,7 +4,7 @@ import time
 import math
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -76,7 +76,7 @@ async def safe_get(client, url, params=None):
         r = await client.get(
             url,
             params=params,
-            timeout=10,
+            timeout=17,
             headers=headers,
         )
 
@@ -212,10 +212,9 @@ async def fmp_fundamentals(client, ticker):
         return {
             "revenue": safe_float(inc.get("revenue")),
             "ebitda": safe_float(inc.get("ebitda")),
-            "net_debt": (
-                safe_float(bal.get("totalDebt") or 0)
-                - safe_float(bal.get("cashAndCashEquivalents") or 0)
-            ),
+            debt = safe_float(bal.get("totalDebt")) or 0
+            cash = safe_float(bal.get("cashAndCashEquivalents")) or 0
+            net_debt = debt - cash,
             "source": "fmp",
             "confidence": 0.6,
         }
@@ -416,7 +415,7 @@ async def screener(data: dict):
                 years=2,
             )
 
-            if res:
+            if res and res.get("upside") is not None:
                 results.append({"ticker": t, "upside": res["upside"]})
 
         await asyncio.gather(*[process(t) for t in tickers])
