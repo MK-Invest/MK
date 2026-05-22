@@ -148,14 +148,12 @@ async def yahoo_search(client, query):
         params={"q": query},
     )
 
-    if not data or not isinstance(data, dict):
+    print("YAHOO SEARCH RESPONSE:", data)
+
+    if not data:
         return []
 
-    quotes = (
-        data.get("quotes")
-        or data.get("finance", {}).get("result")
-        or []
-    )
+    quotes = data.get("quotes", [])
 
     return [
         {
@@ -163,7 +161,7 @@ async def yahoo_search(client, query):
             "name": x.get("shortname") or x.get("longname"),
         }
         for x in quotes
-        if isinstance(x, dict) and x.get("symbol")
+        if x.get("symbol")
     ]
 
 # -------------------------
