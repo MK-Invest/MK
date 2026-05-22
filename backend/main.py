@@ -107,14 +107,34 @@ async def yahoo_quote(client, ticker):
         return None
 
     try:
-        res = data.get("quoteSummary", {}).get("result", [{}])[0]
+        result = data.get("quoteSummary", {}).get("result") or []
+        if not result:
+            return None
+
+        res = result[0] or {}
+
+        price = safe_float(
+            res.get("price", {})
+            .get("regularMarketPrice", {})
+            .get("raw")
+        )
+
+        shares = safe_float(
+            res.get("defaultKeyStatistics", {})
+            .get("sharesOutstanding", {})
+            .get("raw")
+        )
+
+        if price is None and shares is None:
+            return None
 
         return {
-            "price": safe_float(res.get("price", {}).get("regularMarketPrice", {}).get("raw")),
-            "shares": safe_float(res.get("defaultKeyStatistics", {}).get("sharesOutstanding", {}).get("raw")),
+            "price": price,
+            "shares": shares,
             "source": "yahoo",
-            "confidence": 0.85,
+            "confidence": 0.8,
         }
+
     except:
         return None
 
@@ -123,7 +143,8 @@ async def yahoo_search(client, query):
     data = await safe_get(
         client,
         "https://query1.finance.yahoo.com/v1/finance/search",
-        params={"q": query},
+        if not query:
+            return [],
     )
 
     if not data:
@@ -328,7 +349,7 @@ async def health():
 
 
 @app.get("/search")
-async def search(query: str):
+async def search(query: str = Query(..., alias="q")):
     async with httpx.AsyncClient() as client:
         return await yahoo_search(client, query)
 
