@@ -214,7 +214,7 @@ async def fmp_fundamentals(client, ticker):
             "ebitda": safe_float(inc.get("ebitda")),
             debt = safe_float(bal.get("totalDebt")) or 0
             cash = safe_float(bal.get("cashAndCashEquivalents")) or 0
-            net_debt = debt - cash,
+            "net_debt": debt - cash,
             "source": "fmp",
             "confidence": 0.6,
         }
