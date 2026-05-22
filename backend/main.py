@@ -185,31 +185,26 @@ async def yahoo_search(client, query):
         params={"q": query},
     )
 
-    print("YAHOO SEARCH RESPONSE:", data)
-
-    if not data:
+    if not data or not isinstance(data, dict):
         return []
 
-    quotes = data.get("quotes", [])
+    quotes = data.get("quotes") or []
 
-    result = []
+    results = []
 
     for x in quotes:
-
         symbol = x.get("symbol")
         if not symbol:
             continue
 
-        result.append(
-            {
-                "symbol": symbol,
-                "name": x.get("shortname")
-                or x.get("longname")
-                or symbol,
-            }
-        )
+        results.append({
+            "symbol": symbol,
+            "name": x.get("shortname")
+                    or x.get("longname")
+                    or symbol
+        })
 
-    return result
+    return results
 
 # -------------------------
 # FMP (OPTIONAL ENRICHMENT ONLY)
