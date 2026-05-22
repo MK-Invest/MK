@@ -4,7 +4,7 @@ import time
 import math
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -138,7 +138,6 @@ async def yahoo_quote(client, ticker):
     except:
         return None
 
-
 async def yahoo_search(client, query):
     if not query:
         return []
@@ -149,16 +148,22 @@ async def yahoo_search(client, query):
         params={"q": query},
     )
 
-    if not data:
+    if not data or not isinstance(data, dict):
         return []
+
+    quotes = (
+        data.get("quotes")
+        or data.get("finance", {}).get("result")
+        or []
+    )
 
     return [
         {
             "symbol": x.get("symbol"),
             "name": x.get("shortname") or x.get("longname"),
         }
-        for x in data.get("quotes", [])
-        if x.get("symbol")
+        for x in quotes
+        if isinstance(x, dict) and x.get("symbol")
     ]
 
 # -------------------------
@@ -208,12 +213,12 @@ async def fmp_fundamentals(client, ticker):
 
         inc = (income or [{}])[0]
         bal = (balance or [{}])[0]
+        debt = safe_float(bal.get("totalDebt")) or 0
+        cash = safe_float(bal.get("cashAndCashEquivalents")) or 0
 
         return {
             "revenue": safe_float(inc.get("revenue")),
             "ebitda": safe_float(inc.get("ebitda")),
-            debt = safe_float(bal.get("totalDebt")) or 0
-            cash = safe_float(bal.get("cashAndCashEquivalents")) or 0
             "net_debt": debt - cash,
             "source": "fmp",
             "confidence": 0.6,
