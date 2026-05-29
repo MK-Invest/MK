@@ -3,10 +3,15 @@ import os
 import time
 import math
 import httpx
+from backend.technical import compute_technical
+from backend.metrics import compute_metrics
+from backend.storage import save_snapshot
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from backend.sec import get_cik_map, get_company_facts, extract_fundamentals
+from backend.valuation.model import run_scenarios
 
 load_dotenv()
 
@@ -15,6 +20,7 @@ app = FastAPI(title="StockLens API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -25,10 +31,13 @@ app.add_middleware(
 
 FMP_STABLE = "https://financialmodelingprep.com/stable"
 FMP_API_KEY = os.getenv("FMP_API_KEY", "")
-TD_API_KEY = os.getenv("TWELVEDATA_API_KEY", "")
+TD_API_KEY = os.getenv("TWELVEDATA_API_KEY", "4136dbe737214dd49645487ad9f36a04")
 
 CACHE_TTL = 300
-_cache = {}
+_cache: dict = {}
+
+lock = asyncio.Lock()
+sem = asyncio.Semaphore(10)
 
 # =========================================================
 # UTIL
@@ -44,11 +53,11 @@ def safe_float(x):
         if math.isnan(v) or math.isinf(v):
             return None
         return v
-    except:
+    except Exception:
         return None
 
 
-def get_cache(key):
+def get_cache(key: str):
     v = _cache.get(key)
     if not v:
         return None
@@ -58,7 +67,7 @@ def get_cache(key):
     return v["data"]
 
 
-def set_cache(key, data):
+def set_cache(key: str, data):
     _cache[key] = {"data": data, "time": time.time()}
 
 
@@ -66,9 +75,8 @@ def set_cache(key, data):
 # SAFE HTTP
 # =========================================================
 
-async def safe_get(client, url, params=None):
+async def safe_get(client: httpx.AsyncClient, url: str, params: dict = None):
     try:
-
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -78,7 +86,6 @@ async def safe_get(client, url, params=None):
             "Accept": "application/json",
             "Connection": "keep-alive",
         }
-
         r = await client.get(
             url,
             params=params,
@@ -86,145 +93,77 @@ async def safe_get(client, url, params=None):
             timeout=20,
             follow_redirects=True,
         )
-
-        print("URL:", url)
-        print("STATUS:", r.status_code)
-
         if r.status_code != 200:
-            print("BODY:", r.text[:500])
+            print(f"[safe_get] {url} → HTTP {r.status_code}: {r.text[:300]}")
             return None
-
         return r.json()
-
     except Exception as e:
-        print("SAFE_GET ERROR:", repr(e))
+        print(f"[safe_get] ERROR {url}: {repr(e)}")
         return None
+
 
 # =========================================================
 # PROVIDERS
 # =========================================================
 
-# -------------------------
-# YAHOO (PRIMARY)
-# -------------------------
+# ── Twelve Data (cena) ────────────────────────────────────
 
-async def yahoo_quote(client, ticker):
-    data = await safe_get(
-        client,
-        f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}",
-        params={"modules": "price,defaultKeyStatistics"},
-    )
-
-    if not data:
-        return None
-
-    try:
-        result = data.get("quoteSummary", {}).get("result") or []
-        if not result:
-            return None
-
-        res = result[0] or {}
-
-        price = safe_float(
-            res.get("price", {})
-            .get("regularMarketPrice", {})
-            .get("raw")
-        )
-
-        shares = safe_float(
-            res.get("defaultKeyStatistics", {})
-            .get("sharesOutstanding", {})
-            .get("raw")
-        )
-
-        if price is None and shares is None:
-            return None
-
-        return {
-            "price": price,
-            "shares": shares,
-            "source": "yahoo",
-            "confidence": 0.8,
-        }
-
-    except:
-        return None
-
-
-
-# -------------------------
-# TWELVE DATA (PRICE FALLBACK)
-# -------------------------
-
-async def twelvedata_price(client, ticker):
+async def twelvedata_ohlcv(client, ticker: str) -> dict | None:
+    """
+    Stáhne OHLCV time series z TwelveData.
+    Jeden request = cena + historická data pro technickou analýzu.
+    Nahrazuje původní twelvedata_price (2 requesty → 1).
+    """
     if not TD_API_KEY:
         return None
 
     data = await safe_get(
         client,
-        "https://api.twelvedata.com/quote",
-        params={"symbol": ticker, "apikey": TD_API_KEY},
+        "https://api.twelvedata.com/time_series",
+        params={
+            "symbol":     ticker,
+            "interval":   "1day",
+            "outputsize": 200,
+            "apikey":     TD_API_KEY,
+        },
     )
+    if not data or "values" not in data:
+        return None
 
-    if not data:
+    values = data.get("values", [])
+    if not values:
+        return None
+
+    # Cena = close nejnovějšího záznamu (values[0] = nejnovější)
+    price = safe_float(values[0].get("close"))
+    if not price:
         return None
 
     return {
-        "price": safe_float(data.get("close")),
-        "source": "twelvedata",
+        "price":    price,
+        "ohlcv":    values,     # raw data pro compute_technical
+        "source":   "twelvedata",
         "confidence": 0.5,
     }
 
-async def yahoo_search(client, query):
-    if not query:
-        return []
+# ── FMP (obohacení) ───────────────────────────────────────
 
-    data = await safe_get(
-        client,
-        "https://query1.finance.yahoo.com/v1/finance/search",
-        params={"q": query},
-    )
-
-    if not data or not isinstance(data, dict):
-        return []
-
-    quotes = data.get("quotes") or []
-
-    results = []
-
-    for x in quotes:
-        symbol = x.get("symbol")
-        if not symbol:
-            continue
-
-        results.append({
-            "symbol": symbol,
-            "name": x.get("shortname")
-                    or x.get("longname")
-                    or symbol
-        })
-
-    return results
-
-# -------------------------
-# FMP (OPTIONAL ENRICHMENT ONLY)
-# -------------------------
-
-async def fmp_fundamentals(client, ticker):
+async def fmp_fundamentals(client: httpx.AsyncClient, ticker: str) -> dict | None:
     if not FMP_API_KEY:
         return None
 
     try:
-        income = await safe_get(
-            client,
-            f"{FMP_STABLE}/income-statement",
-            params={"symbol": ticker, "limit": 1, "apikey": FMP_API_KEY},
-        )
-
-        balance = await safe_get(
-            client,
-            f"{FMP_STABLE}/balance-sheet-statement",
-            params={"symbol": ticker, "limit": 1, "apikey": FMP_API_KEY},
+        income, balance = await asyncio.gather(
+            safe_get(
+                client,
+                f"{FMP_STABLE}/income-statement",
+                params={"symbol": ticker, "limit": 1, "apikey": FMP_API_KEY},
+            ),
+            safe_get(
+                client,
+                f"{FMP_STABLE}/balance-sheet-statement",
+                params={"symbol": ticker, "limit": 1, "apikey": FMP_API_KEY},
+            ),
         )
 
         inc = (income or [{}])[0]
@@ -239,20 +178,26 @@ async def fmp_fundamentals(client, ticker):
             "source": "fmp",
             "confidence": 0.6,
         }
-    except:
+    except Exception as e:
+        print(f"[fmp_fundamentals] ERROR {ticker}: {repr(e)}")
         return None
+
 
 
 # =========================================================
 # MERGE ENGINE
 # =========================================================
 
-PRIORITY = {"fmp": 3, "yahoo": 2, "twelvedata": 1}
+PRIORITY = {"fmp": 3, "twelvedata": 1, "sec": 2}
 
 
-def merge(*sources):
-    out = {}
-    score = {}
+def merge(*sources) -> dict:
+    """
+    Sloučí více zdrojů dat podle priority a confidence.
+    Vyhrává zdroj s nejvyšším PRIORITY[src] + confidence.
+    """
+    out: dict = {}
+    score: dict = {}
 
     for s in sources:
         if not s:
@@ -262,14 +207,10 @@ def merge(*sources):
         conf = s.get("confidence", 0.5)
 
         for k, v in s.items():
-            if k in ("source", "confidence"):
-                continue
-
-            if v is None:
+            if k in ("source", "confidence") or v is None:
                 continue
 
             sscore = PRIORITY.get(src, 0) + conf
-
             if k not in out or sscore > score[k]:
                 out[k] = v
                 score[k] = sscore
@@ -281,66 +222,79 @@ def merge(*sources):
 # CORE DATA LAYER
 # =========================================================
 
-async def get_stock_data(client, ticker):
+_cik_map_cache: dict | None = None
+
+
+def get_cik(ticker: str) -> str | None:
+    global _cik_map_cache
+    if _cik_map_cache is None:
+        _cik_map_cache = get_cik_map()
+    return _cik_map_cache.get(ticker.upper())
+
+
+async def get_sec_fundamentals(ticker: str) -> dict | None:
+    cik = get_cik(ticker)
+    if not cik:
+        return None
+
+    data = get_company_facts(cik)
+    if not data:
+        return None
+
+    result = extract_fundamentals(data)
+    # ← přidej:
+    print(f"[sec] {ticker} shares={result.get('shares')} revenue={result.get('revenue')} net_income={result.get('net_income')}")
+    print(f"[sec] {ticker} revenue_history={[r['end'] for r in result.get('history',{}).get('revenue',[])[:4]]}")
+
+    return result
+    
+async def get_stock_data(client, ticker: str) -> dict:
+    """
+    Hlavní datová vrstva. Spojuje TwelveData (cena + OHLCV),
+    SEC (fundamentals) a FMP (obohacení) přes merge engine.
+    """
     cached = get_cache(ticker)
     if cached:
         return cached
 
-    yahoo = await yahoo_quote(client, ticker)
+    td, sec, fmp_fund = await asyncio.gather(
+        twelvedata_ohlcv(client, ticker),       # ← změněno z twelvedata_price
+        get_sec_fundamentals(ticker),
+        fmp_fundamentals(client, ticker),
+    )
 
-    td = None
-    if not yahoo or not yahoo.get("price"):
-        td = await twelvedata_price(client, ticker)
+    # Odděl OHLCV od price před merge (merge neumí listy)
+    ohlcv = None
+    if td and "ohlcv" in td:
+        ohlcv = td.pop("ohlcv")   # vyjmi z td aby merge dostal jen skaláry
 
-    fmp = await fmp_fundamentals(client, ticker)
+    merged = merge(td, sec, fmp_fund)
 
-    merged = merge(yahoo, td, fmp)
+    cash = merged.get("cash") or 0
+    debt = merged.get("debt") or 0
+    if "net_debt" not in merged:
+        merged["net_debt"] = debt - cash
 
     merged["ticker"] = ticker
-    merged.setdefault("price", 0)
-    merged.setdefault("shares", None)
+    merged.setdefault("price", None)
     merged.setdefault("revenue", 0)
-    merged.setdefault("net_debt", 0)
+    merged.setdefault("shares", None)
+
+    # Technická analýza — počítej jen pokud máme OHLCV a cenu
+    if ohlcv and merged.get("price"):
+        try:
+            merged["technical"] = compute_technical(ohlcv, merged["price"])
+        except Exception as e:
+            print(f"[technical] {ticker} error: {repr(e)}")
+            merged["technical"] = None
+    else:
+        merged["technical"] = None
+
+    print(f"[get_stock_data] {ticker} | price={merged.get('price')} | ohlcv={'yes' if ohlcv else 'no'}")
 
     set_cache(ticker, merged)
+    save_snapshot(merged)
     return merged
-
-
-# =========================================================
-# VALUATION
-# =========================================================
-
-def compute_scenario(
-    *,
-    revenue,
-    revenue_cagr,
-    ebitda_margin,
-    ev_ebitda_multiple,
-    net_debt,
-    shares,
-    price,
-    required_return,
-    years,
-):
-    if not price or not shares:
-        return None
-
-    projected_revenue = revenue * (1 + revenue_cagr) ** years
-    projected_ebitda = projected_revenue * ebitda_margin
-
-    exit_ev = projected_ebitda * ev_ebitda_multiple
-    equity = exit_ev - (net_debt or 0)
-
-    exit_price = equity / shares
-    intrinsic = exit_price / (1 + required_return) ** years
-
-    return {
-        "projected_revenue": round(projected_revenue, 0),
-        "projected_ebitda": round(projected_ebitda, 0),
-        "exit_price": round(exit_price, 2),
-        "intrinsic_value": round(intrinsic, 2),
-        "upside": round((intrinsic / price - 1), 4),
-    }
 
 
 # =========================================================
@@ -372,73 +326,217 @@ async def health():
     }
 
 
+@app.delete("/cache")
+async def clear_cache():
+    """Vymaže celou in-memory cache — užitečné při ladění."""
+    count = len(_cache)
+    _cache.clear()
+    return {"cleared": count}
+
+
+@app.delete("/cache/{ticker}")
+async def clear_cache_ticker(ticker: str):
+    """Vymaže cache pro konkrétní ticker."""
+    ticker = ticker.upper()
+    existed = ticker in _cache
+    _cache.pop(ticker, None)
+    return {"ticker": ticker, "cleared": existed}
+
+
+
 @app.get("/search")
-async def search(query: str = Query(..., alias="q")):
-    async with httpx.AsyncClient() as client:
-        return await yahoo_search(client, query)
+async def search(query: str):
+    """
+    Hledá firmy v SEC CIK mapě podle tickeru.
+    Nevyžaduje žádný API klíč — data jsou z SEC EDGAR.
+    """
+    if not query:
+        return []
+
+    q = query.strip().upper()
+
+    # Načti CIK mapu (globálně cachovaná)
+    global _cik_map_cache
+    if _cik_map_cache is None:
+        _cik_map_cache = get_cik_map()
+
+    exact = []
+    partial = []
+
+    for ticker in _cik_map_cache:
+        if ticker == q:
+            exact.append({"symbol": ticker, "name": ticker})
+        elif q in ticker:
+            partial.append({"symbol": ticker, "name": ticker})
+
+    results = exact + partial
+    return results[:8]
 
 
 @app.get("/company/{ticker}")
 async def company(ticker: str):
+    """
+    Vrátí profil firmy, cenu a dostupné fundamentals.
+    Sdílí get_stock_data() logiku — bez duplicit.
+    """
+    ticker = ticker.upper()
     async with httpx.AsyncClient() as client:
-        yahoo = await yahoo_quote(client, ticker)
-        fmp = await fmp_fundamentals(client, ticker)
-        return merge(yahoo, fmp)
+        d = await get_stock_data(client, ticker)
+
+    sec = await get_sec_fundamentals(ticker)
+    fundamentals = {k: v for k, v in d.items() if k not in ("ticker", "technical")}
+    if sec and "history" in sec:
+        fundamentals["history"] = sec["history"]
+
+    # Předej price + fundamentals do compute_metrics
+    metrics_input = {**fundamentals, "price": d.get("price")}
+    metrics = compute_metrics(metrics_input)
+    
+    return {
+        "ticker": ticker,
+        "price": d.get("price"),
+        "fundamentals": fundamentals,
+        "metrics": metrics,       # ← toto frontend čeká v data.metrics.ttm
+        "technical": d.get("technical"),
+    }
 
 
 @app.post("/valuation/{ticker}")
 async def valuation(ticker: str, body: ValuationRequest):
+    """
+    Spustí scénářový model (bear / base / bull) pro daný ticker.
+    Vstupní parametry lze přepsat přes body.base.
+    """
+    ticker = ticker.upper()
     async with httpx.AsyncClient() as client:
         d = await get_stock_data(client, ticker)
 
-        if not d.get("shares"):
-            return {"error": "missing shares", "data": d}
+    shares = d.get("shares")
+    if not shares or shares == 0:
+        raise HTTPException(status_code=422, detail=f"Chybí data o počtu akcií pro {ticker}")
 
-        base = body.base or ScenarioParams(0.08, 0.2, 15)
+    price = d.get("price")
+    if not price:
+        raise HTTPException(status_code=422, detail=f"Nepodařilo se načíst cenu akcie pro {ticker} — zkontroluj API klíče (TD_API_KEY, FMP_API_KEY) v logech serveru")
 
-        result = compute_scenario(
-            revenue=d.get("revenue", 0),
-            revenue_cagr=base.revenue_cagr,
-            ebitda_margin=base.ebitda_margin,
-            ev_ebitda_multiple=base.ev_ebitda_multiple,
-            net_debt=d.get("net_debt", 0),
-            shares=d["shares"],
-            price=d.get("price", 0),
-            required_return=body.required_return,
-            years=body.years,
-        )
+    # Umožní přepsat parametry z body — nulové hodnoty se ignorují a použijí se výchozí
+    base_override = body.base.model_dump() if body.base else {}
 
-        return {"ticker": ticker, "data": d, "valuation": result}
+    # ebitda_margin: body → SEC historická data → fallback 0.20
+    sec_margin = d.get("ebitda_margin")
 
+    input_data = {
+        "revenue":            d.get("revenue") or 0,
+        "ebitda_margin":      base_override.get("ebitda_margin") or sec_margin or 0.20,
+        "ev_ebitda_multiple": base_override.get("ev_ebitda_multiple") or 15.0,
+        "net_debt":           d.get("net_debt") or 0,
+        "shares":             shares,
+    }
+    print(f"[valuation] {ticker} revenue={input_data['revenue']:,.0f} margin={input_data['ebitda_margin']:.2%} shares={input_data['shares']}")
+
+    result = run_scenarios(input_data)
+
+    return {
+        "ticker": ticker,
+        "price": price,
+        "data": d,
+        "valuation": result,
+    }
+
+@app.get("/debug/{ticker}")
+async def debug(ticker: str):
+    ticker = ticker.upper()
+    cik = get_cik(ticker)
+    if not cik:
+        return {"error": "CIK not found"}
+    
+    data = get_company_facts(cik)
+    if not data:
+        return {"error": "No SEC data"}
+    
+    gaap = data["facts"].get("us-gaap", {})
+    dei  = data["facts"].get("dei", {})
+
+    # Revenue koncepty
+    revenue_concepts = [
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "Revenues",
+        "SalesRevenueNet",
+    ]
+    result = {}
+    for c in revenue_concepts:
+        items = gaap.get(c, {}).get("units", {}).get("USD", [])
+        recent = [i for i in items if i.get("end", "") >= "2024-01-01"]
+        recent.sort(key=lambda x: x.get("end", ""), reverse=True)
+        result[c] = recent[:8]
+
+    # Shares koncepty
+    share_concepts = [
+        "WeightedAverageNumberOfDilutedSharesOutstanding",
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+        "CommonStockSharesOutstanding",
+        "EntityCommonStockSharesOutstanding",
+    ]
+    shares_result = {}
+    for c in share_concepts:
+        items = (gaap.get(c) or dei.get(c) or {}).get("units", {}).get("shares", [])
+        recent = [i for i in items if i.get("end", "") >= "2024-01-01"]
+        recent.sort(key=lambda x: x.get("end", ""), reverse=True)
+        shares_result[c] = recent[:3]
+
+    result["_shares"] = shares_result
+    return result
 
 @app.post("/screener")
 async def screener(data: dict):
-    tickers = data.get("tickers", [])
+    """
+    Batch valuace pro seznam tickerů.
+    Výstup je seřazen podle base upside sestupně.
+    """
+    tickers = [str(t).upper() for t in data.get("tickers", [])]
+    if not tickers:
+        raise HTTPException(status_code=400, detail="Zadej alespoň jeden ticker")
+
+    results = []
 
     async with httpx.AsyncClient() as client:
-        results = []
+        async def process(ticker: str):
+            async with sem:
+                try:
+                    d = await get_stock_data(client, ticker)
 
-        async def process(t):
-            d = await get_stock_data(client, t)
+                    shares = d.get("shares")
+                    if not shares or shares == 0:
+                        return None
 
-            if not d.get("shares"):
-                return
+                    # Přesně 5 argumentů které přijímá value_company()
+                    res = run_scenarios({
+                        "revenue":            d.get("revenue") or 0,
+                        "ebitda_margin":      d.get("ebitda_margin") or 0.20,
+                        "ev_ebitda_multiple": 15.0,
+                        "net_debt":           d.get("net_debt") or 0,
+                        "shares":             shares,
+                    })
 
-            res = compute_scenario(
-                revenue=d.get("revenue", 0),
-                revenue_cagr=0.08,
-                ebitda_margin=0.2,
-                ev_ebitda_multiple=15,
-                net_debt=d.get("net_debt", 0),
-                shares=d["shares"],
-                price=d.get("price", 0),
-                required_return=0.12,
-                years=2,
-            )
+                    base_price = (res.get("base") or {}).get("price")
+                    if not res or base_price is None:
+                        return None
 
-            if res and res.get("upside") is not None:
-                results.append({"ticker": t, "upside": res["upside"]})
+                    current_price = d.get("price") or 0
+                    upside = (base_price / current_price - 1) if current_price else None
 
-        await asyncio.gather(*[process(t) for t in tickers])
+                    return {
+                        "ticker": ticker,
+                        "price": current_price,
+                        "upside": upside,
+                        "valuation": res,
+                    }
+                except Exception as e:
+                    print(f"[screener] {ticker} error: {repr(e)}")
+                    return None
 
-    return sorted(results, key=lambda x: x["upside"], reverse=True)
+        gathered = await asyncio.gather(*(process(t) for t in tickers))
+
+    results = [r for r in gathered if r is not None]
+    results.sort(key=lambda x: x["upside"], reverse=True)
+    return results

@@ -244,7 +244,14 @@
 </main>
 
 <script>
-const API = 'https://mk-m01x.onrender.com';
+const isLocal =
+  location.hostname === "localhost" ||
+  location.hostname === "127.0.0.1" ||
+  location.protocol === "file:";
+
+const API = isLocal
+  ? "http://127.0.0.1:8000"
+  : "https://mk-m01x.onrender.com";
 let revChart, epsChart;
 
 async function checkBackend() {
