@@ -42,21 +42,20 @@ export function MetricsGrid({ data }) {
   const fundamentals = data?.fundamentals ?? {};
   const metrics = data?.metrics ?? {};
   const technical = data?.technical ?? {};
-  const ttm = {
-    ...data.fundamentals,
-    ...data.metrics?.ttm,
-    ...data.technical,
-    ...data.metrics?.trend,
-  };  
 
-  const getValue = (key) => {
-    return (
-      data?.metrics?.ttm?.[key] ??
-      data?.fundamentals?.[key] ??
-      data?.technical?.[key] ??
-      data?.metrics?.trend?.[key]
-    );
+  const ttm = {
+    ...fundamentals,
+    ...metrics?.ttm,
+    ...technical,
+    ...metrics?.trend,
   };
+
+  const getValue = (key) =>
+    metrics?.ttm?.[key] ??
+    fundamentals?.[key] ??
+    technical?.[key] ??
+    metrics?.trend?.[key];
+
   const history = fundamentals?.history ?? {};
 
   const revenue = history?.revenue ?? [];
@@ -99,19 +98,17 @@ export function MetricsGrid({ data }) {
     }
   };
 
-  const buildChartData = (key) => {
-    return quarters
+  const buildChartData = (key) =>
+    quarters
       .filter((q) => q[key] != null)
       .map((q) => ({
         date: q.end?.slice(2, 7),
         value: q[key] / 1e9,
       }))
       .reverse();
-  };
 
   return (
     <div style={styles.wrapper}>
-      {/* HERO */}
       <div style={styles.hero}>
         <div>
           <div style={styles.ticker}>{data?.ticker}</div>
@@ -128,7 +125,6 @@ export function MetricsGrid({ data }) {
         </div>
       </div>
 
-      {/* METRICS */}
       <div style={styles.metricsGrid}>
         {METRICS.map((metric) => (
           <div key={metric.key} style={styles.metricCard}>
@@ -140,16 +136,70 @@ export function MetricsGrid({ data }) {
         ))}
       </div>
 
-      {/* CHARTS */}
       <div style={styles.chartGrid}>
         {CHARTS.map((chart) => {
           const chartData = buildChartData(chart.key);
 
           return (
-  <div style={{color:"red", fontSize:50}}>
-    THIS IS NEW METRICS GRID BUILD
-  </div>
-);
+            <div key={chart.key} style={styles.chartCard}>
+              <div style={styles.chartTitle}>{chart.label}</div>
+
+              <ResponsiveContainer width="100%" height={240}>
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient
+                      id={`gradient-${chart.key}`}
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
+                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+
+                  <CartesianGrid stroke="#172033" vertical={false} />
+
+                  <XAxis
+                    dataKey="date"
+                    stroke="#475569"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: 11 }}
+                  />
+
+                  <YAxis
+                    stroke="#475569"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: 11 }}
+                  />
+
+                  <Tooltip
+                    contentStyle={{
+                      background: "#0b1020",
+                      border: "1px solid #1e293b",
+                      borderRadius: 14,
+                      color: "white",
+                    }}
+                  />
+
+                  <Area
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#22c55e"
+                    fill={`url(#gradient-${chart.key})`}
+                    strokeWidth={2.5}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 const styles = {
@@ -159,7 +209,6 @@ const styles = {
     gap: 18,
   },
 
-  /* HERO */
   hero: {
     display: "flex",
     justifyContent: "space-between",
@@ -197,7 +246,6 @@ const styles = {
     textAlign: "right",
   },
 
-  /* METRICS — RESPONSIVE ROW WRAP */
   metricsGrid: {
     display: "flex",
     flexWrap: "wrap",
@@ -207,7 +255,6 @@ const styles = {
   metricCard: {
     flex: "1 1 160px",
     minWidth: 150,
-
     background: "#0b1020",
     border: "1px solid #172033",
     borderRadius: 14,
@@ -227,7 +274,6 @@ const styles = {
     fontWeight: 700,
   },
 
-  /* CHARTS */
   chartGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
