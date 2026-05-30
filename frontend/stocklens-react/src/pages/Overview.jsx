@@ -1,8 +1,3 @@
-export function MetricsGrid({ data }) {
-  console.log("METRICS GRID DATA:", data);
-
-  if (!data) return <div>NO DATA</div>;
-
 import { useState } from "react";
 
 import { getCompany } from "../api";

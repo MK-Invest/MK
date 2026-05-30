@@ -1,3 +1,5 @@
+
+
 import {
   ResponsiveContainer,
   AreaChart,
@@ -37,6 +39,7 @@ const CHARTS = [
 ];
 
 export function MetricsGrid({ data }) {
+  console.log("METRICS GRID DATA:", data);
   if (!data) return null;
 
   const fundamentals = data?.fundamentals ?? {};
