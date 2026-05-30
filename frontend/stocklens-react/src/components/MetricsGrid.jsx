@@ -37,16 +37,20 @@ const CHARTS = [
 ];
 
 export function MetricsGrid({ data }) {
-  console.log("fundamentals", fundamentals);
-  console.log("metrics", metrics);
-  console.log("technical", technical);
-  console.log("price", data?.price);
   if (!data) return null;
 
   const fundamentals = data?.fundamentals ?? {};
   const metrics = data?.metrics ?? {};
+  const technical = data?.technical ?? {};
   const ttm = metrics?.ttm ?? {};
-
+  const getValue = (key) => {
+    return (
+      ttm?.[key] ??
+      fundamentals?.[key] ??
+      technical?.[key] ??
+      metrics?.trend?.[key]
+    );
+  };
   const history = fundamentals?.history ?? {};
 
   const revenue = history?.revenue ?? [];
@@ -124,7 +128,7 @@ export function MetricsGrid({ data }) {
           <div key={metric.key} style={styles.metricCard}>
             <div style={styles.metricLabel}>{metric.label}</div>
             <div style={styles.metricValue}>
-              {formatValue(ttm?.[metric.key], metric.type)}
+              {formatValue(getValue(metric.key), metric.type)}
             </div>
           </div>
         ))}
