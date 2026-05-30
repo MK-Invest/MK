@@ -198,13 +198,15 @@ def extract_time_series(section, concept, n=4):
         if existing is None:
             fy_groups[fy_key][fp] = item
         else:
-            # Preferuj: 1. frame CYYYYQn, 2. novější filed datum
+            # Preferuj: 1. frame CYYYYQn, 2. pozdější end datum (novější data)
             new_score = _frame_score(item)
             old_score = _frame_score(existing)
             if new_score > old_score:
                 fy_groups[fy_key][fp] = item
-            elif new_score == old_score and item.get("filed", "") > existing.get("filed", ""):
-                fy_groups[fy_key][fp] = item
+            elif new_score == old_score:
+                # Pozdější end = aktuálnější záznam pro daný fp
+                if item.get("end", "") > existing.get("end", ""):
+                    fy_groups[fy_key][fp] = item
 
     derived_quarters = []   # výsledné true-quarterly záznamy
 
@@ -321,6 +323,54 @@ def extract_time_series(section, concept, n=4):
         if q["end"] not in seen:
             seen.add(q["end"])
             unique_q.append(q)
+
+    # ── Globální Q4 derivace ──────────────────────────────
+    # Pro každý FY annual záznam zkontroluj jestli chybí Q4 (= záznam jehož end
+    # je blízký FY end). Pokud máme Q1+Q2+Q3 daného FY, dopočítej Q4.
+    # Tím opravíme případy jako PFE kde Q4 není v 10-Q ale máme frame-quarterly Q1-Q3.
+    import datetime as _dt
+
+    def _parse_date(d):
+        try:
+            return _dt.date.fromisoformat(d)
+        except Exception:
+            return None
+
+    for fy_item in true_annual:
+        fy_end = _parse_date(fy_item.get("end", ""))
+        fy_val = safe_float(fy_item.get("val"))
+        if fy_end is None or fy_val is None:
+            continue
+
+        # FY začátek ≈ fy_end − 365 dní
+        fy_start_approx = fy_end - _dt.timedelta(days=370)
+
+        # Najdi Q1, Q2, Q3 patřící do tohoto FY
+        fy_quarters_found = [
+            q for q in unique_q
+            if not q.get("is_annual")
+            and _parse_date(q["end"]) is not None
+            and fy_start_approx < _parse_date(q["end"]) <= fy_end
+        ]
+
+        # Zkontroluj jestli Q4 (= záznam s end blízkým fy_end) chybí
+        q4_exists = any(
+            abs((_parse_date(q["end"]) - fy_end).days) <= 45
+            for q in fy_quarters_found
+        )
+
+        if not q4_exists and len(fy_quarters_found) >= 1:
+            q_sum = sum(q["val"] for q in fy_quarters_found)
+            q4_val = fy_val - q_sum
+            # Sanity: Q4 musí být kladný a rozumný (max 50 % FY)
+            if 0 < q4_val <= fy_val * 0.5:
+                q4_end = fy_item["end"]   # Q4 end = FY end
+                if q4_end not in seen:
+                    seen.add(q4_end)
+                    unique_q.append({"end": q4_end, "val": q4_val, "is_q4_derived": True})
+
+    # Znovu seřaď po přidání odvozených Q4
+    unique_q.sort(key=lambda x: x["end"], reverse=True)
 
     if len(unique_q) >= n:
         # Hledej nejnovější okno n po sobě jdoucích kontinuálních kvartálů.
@@ -867,7 +917,7 @@ def extract_fundamentals(data: dict) -> dict:
     revenue_series = []
 
     for _concept in _revenue_candidates:
-        _s = extract_time_series(gaap, _concept, n=4)
+        _s = extract_time_series(gaap, _concept, n=5)
         if not _s:
             continue
         # Přijmeme sérii jen pokud nejnovější záznam je čerstvý (< 2 roky)
@@ -884,14 +934,14 @@ def extract_fundamentals(data: dict) -> dict:
     net_income_series = pick_first_existing(gaap, [
         "NetIncomeLoss",
         "ProfitLoss",
-    ])
+    ], n=5)
 
     operating_series = pick_first_existing(gaap, [
         "OperatingIncomeLoss",
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic",
         "OperatingIncomeLossFromContinuingOperations",
-    ])
+    ], n=5)
 
     # Depreciation: AAPL a část firem reportuje D&A primárně v cash flow
     # statement pod odlišnými koncepty než v income statement.
@@ -902,7 +952,7 @@ def extract_fundamentals(data: dict) -> dict:
         "DepreciationAmortizationAndAccretion",          # CF statement, AAPL
         "OtherDepreciationAndAmortization",
         "AmortizationOfIntangibleAssets",                # softwarové firmy
-    ])
+    ], n=5)
 
     # ── Rozvaha (skaláry) ────────────────────────────────
     debt = pick_latest_scalar(gaap, [
@@ -931,9 +981,15 @@ def extract_fundamentals(data: dict) -> dict:
     }
 
     # ── FY záznamy pro Q4 dopočet v compute_ttm ──────────
-    # compute_ttm potřebuje FY řady pro dopočítání Q4 = FY − (Q1+Q2+Q3),
-    # pokud quarterly série má jen 3 záznamy (jsme uprostřed fiskálního roku).
-    annual_revenue    = pick_first_existing_annual(gaap, _revenue_candidates)
+    # Stejná staleness logika jako pro revenue_series —
+    # přeskočíme koncepty s historickými daty (např. PFE před Upjohn spinoffem)
+    annual_revenue = []
+    for _concept in _revenue_candidates:
+        _a = pick_first_existing_annual(gaap, [_concept])
+        if _a and _a[0]["end"][:4] >= _two_years_ago:
+            annual_revenue = _a
+            break
+
     annual_net_income = pick_first_existing_annual(gaap, ["NetIncomeLoss", "ProfitLoss"])
     annual_operating  = pick_first_existing_annual(gaap, ["OperatingIncomeLoss"])
 
