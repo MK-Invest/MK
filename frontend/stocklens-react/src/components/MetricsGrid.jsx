@@ -26,8 +26,6 @@ const METRICS = [
 
   { key: "fcf_yield", label: "FCF Yield", type: "percent" },
   { key: "ev_ebitda", label: "EV/EBITDA", type: "multiple" },
-
-  { key: "volume", label: "Volume", type: "number" },
 ];
 
 const CHARTS = [
@@ -42,6 +40,7 @@ export function MetricsGrid({ data }) {
   const fundamentals = data?.fundamentals ?? {};
   const metrics = data?.metrics ?? {};
   const ttm = metrics?.ttm ?? {};
+  const technical = data?.technical ?? {};
 
   const history = fundamentals?.history ?? {};
 
@@ -49,6 +48,9 @@ export function MetricsGrid({ data }) {
   const netIncome = history?.net_income ?? [];
   const operating = history?.operating_income ?? [];
   const depreciation = history?.depreciation ?? [];
+
+  const demandZones = technical?.zones?.demand ?? [];
+  const supplyZones = technical?.zones?.supply ?? [];
 
   const quarters = revenue.map((r, i) => ({
     end: r?.end,
@@ -85,15 +87,14 @@ export function MetricsGrid({ data }) {
     }
   };
 
-  const buildChartData = (key) => {
-    return quarters
+  const buildChartData = (key) =>
+    quarters
       .filter((q) => q[key] != null)
       .map((q) => ({
         date: q.end?.slice(2, 7),
         value: q[key] / 1e9,
       }))
       .reverse();
-  };
 
   return (
     <div style={styles.wrapper}>
@@ -101,106 +102,192 @@ export function MetricsGrid({ data }) {
       <div style={styles.hero}>
         <div>
           <div style={styles.ticker}>{data?.ticker}</div>
-          <div style={styles.subtitle}>StockLens Terminal</div>
+          <div style={styles.subtitle}>Stock Terminal</div>
+        </div>
+
+        <div>
+          <div style={styles.price}>
+            ${data?.price?.toFixed(2)}
+          </div>
+          <div style={styles.priceLabel}>Price</div>
         </div>
 
         <div>
           <div style={styles.marketCap}>
             {formatValue(ttm?.market_cap, "money")}
           </div>
-          <div style={styles.marketCapLabel}>
-            Market Capitalization
-          </div>
+          <div style={styles.marketCapLabel}>Market Cap</div>
         </div>
       </div>
 
       {/* METRICS */}
       <div style={styles.metricsGrid}>
-        {METRICS.map((metric) => (
-          <div key={metric.key} style={styles.metricCard}>
-            <div style={styles.metricLabel}>{metric.label}</div>
+        {METRICS.map((m) => (
+          <div key={m.key} style={styles.metricCard}>
+            <div style={styles.metricLabel}>{m.label}</div>
             <div style={styles.metricValue}>
-              {formatValue(ttm?.[metric.key], metric.type)}
+              {formatValue(ttm?.[m.key], m.type)}
             </div>
           </div>
         ))}
       </div>
 
+      {/* FUNDAMENTALS */}
+      <div style={styles.section}>
+        <div style={styles.sectionTitle}>Financial Summary</div>
+
+        <div style={styles.metricsGrid}>
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>Revenue</div>
+            <div style={styles.metricValue}>
+              {formatLarge(fundamentals.revenue)}
+            </div>
+          </div>
+
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>Net Income</div>
+            <div style={styles.metricValue}>
+              {formatLarge(fundamentals.net_income)}
+            </div>
+          </div>
+
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>FCF</div>
+            <div style={styles.metricValue}>
+              {formatLarge(fundamentals.fcf)}
+            </div>
+          </div>
+
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>EBITDA Margin</div>
+            <div style={styles.metricValue}>
+              {(fundamentals.ebitda_margin * 100).toFixed(1)}%
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* TECHNICAL */}
+      <div style={styles.section}>
+        <div style={styles.sectionTitle}>Technical Analysis</div>
+
+        <div style={styles.metricsGrid}>
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>RSI</div>
+            <div style={styles.metricValue}>{technical.rsi}</div>
+          </div>
+
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>EMA 20</div>
+            <div style={styles.metricValue}>
+              ${technical.ema_20?.toFixed(2)}
+            </div>
+          </div>
+
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>SMA 50</div>
+            <div style={styles.metricValue}>
+              ${technical.sma_50?.toFixed(2)}
+            </div>
+          </div>
+
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>SMA 200</div>
+            <div style={styles.metricValue}>
+              ${technical.sma_200?.toFixed(2)}
+            </div>
+          </div>
+
+          <div style={styles.metricCard}>
+            <div style={styles.metricLabel}>Trend</div>
+            <div style={styles.metricValue}>
+              {technical.trend}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* CHARTS */}
       <div style={styles.chartGrid}>
-        {CHARTS.map((chart) => {
-          const chartData = buildChartData(chart.key);
+        {CHARTS.map((c) => (
+          <div key={c.key} style={styles.chartCard}>
+            <div style={styles.chartTitle}>{c.label}</div>
 
-          return (
-            <div key={chart.key} style={styles.chartCard}>
-              <div style={styles.chartTitle}>{chart.label}</div>
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={buildChartData(c.key)}>
+                <CartesianGrid stroke="#172033" vertical={false} />
+                <XAxis dataKey="date" stroke="#475569" />
+                <YAxis stroke="#475569" />
+                <Tooltip />
 
-              <ResponsiveContainer width="100%" height={240}>
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient
-                      id={`gradient-${chart.key}`}
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
+                <Area
+                  type="monotone"
+                  dataKey="value"
+                  stroke="#22c55e"
+                  fill="#22c55e"
+                  fillOpacity={0.2}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        ))}
+      </div>
 
-                  <CartesianGrid stroke="#172033" vertical={false} />
+      {/* QUARTERS */}
+      <div style={styles.tableCard}>
+        <div style={styles.sectionTitle}>Quarterly Results</div>
 
-                  <XAxis
-                    dataKey="date"
-                    stroke="#475569"
-                    tickLine={false}
-                    axisLine={false}
-                    tick={{ fontSize: 11 }}
-                  />
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Revenue</th>
+              <th>Net Income</th>
+              <th>EBITDA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {quarters.map((q) => (
+              <tr key={q.end}>
+                <td>{q.end}</td>
+                <td>{formatLarge(q.revenue)}</td>
+                <td>{formatLarge(q.net_income)}</td>
+                <td>{formatLarge(q.ebitda)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-                  <YAxis
-                    stroke="#475569"
-                    tickLine={false}
-                    axisLine={false}
-                    tick={{ fontSize: 11 }}
-                  />
-
-                  <Tooltip
-                    contentStyle={{
-                      background: "#0b1020",
-                      border: "1px solid #1e293b",
-                      borderRadius: 14,
-                      color: "white",
-                    }}
-                  />
-
-                  <Area
-                    type="monotone"
-                    dataKey="value"
-                    stroke="#22c55e"
-                    fill={`url(#gradient-${chart.key})`}
-                    strokeWidth={2.5}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+      {/* ZONES */}
+      <div style={styles.chartGrid}>
+        <div style={styles.chartCard}>
+          <div style={styles.chartTitle}>Support Zones</div>
+          {demandZones.map((z, i) => (
+            <div key={i} style={styles.zoneRow}>
+              <span>${z.price.toFixed(2)}</span>
+              <span>{(z.strength * 100).toFixed(1)}%</span>
             </div>
-          );
-        })}
+          ))}
+        </div>
+
+        <div style={styles.chartCard}>
+          <div style={styles.chartTitle}>Resistance Zones</div>
+          {supplyZones.map((z, i) => (
+            <div key={i} style={styles.zoneRow}>
+              <span>${z.price.toFixed(2)}</span>
+              <span>{(z.strength * 100).toFixed(1)}%</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
 const styles = {
-  wrapper: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 18,
-  },
+  wrapper: { display: "flex", flexDirection: "column", gap: 18 },
 
-  /* HERO */
   hero: {
     display: "flex",
     justifyContent: "space-between",
@@ -213,32 +300,15 @@ const styles = {
     gap: 12,
   },
 
-  ticker: {
-    fontSize: 34,
-    fontWeight: 800,
-    letterSpacing: "-1px",
-  },
+  ticker: { fontSize: 34, fontWeight: 800 },
+  subtitle: { color: "#64748b" },
 
-  subtitle: {
-    marginTop: 4,
-    color: "#64748b",
-    fontSize: 13,
-  },
+  price: { fontSize: 32, fontWeight: 800 },
+  priceLabel: { color: "#64748b", fontSize: 12 },
 
-  marketCap: {
-    fontSize: 26,
-    fontWeight: 700,
-    textAlign: "right",
-  },
+  marketCap: { fontSize: 20, fontWeight: 700 },
+  marketCapLabel: { color: "#64748b", fontSize: 12 },
 
-  marketCapLabel: {
-    color: "#64748b",
-    marginTop: 4,
-    fontSize: 12,
-    textAlign: "right",
-  },
-
-  /* METRICS — RESPONSIVE ROW WRAP */
   metricsGrid: {
     display: "flex",
     flexWrap: "wrap",
@@ -247,8 +317,6 @@ const styles = {
 
   metricCard: {
     flex: "1 1 160px",
-    minWidth: 150,
-
     background: "#0b1020",
     border: "1px solid #172033",
     borderRadius: 14,
@@ -256,19 +324,20 @@ const styles = {
   },
 
   metricLabel: {
-    color: "#64748b",
     fontSize: 11,
-    marginBottom: 10,
-    textTransform: "uppercase",
-    letterSpacing: 1,
+    color: "#64748b",
+    marginBottom: 8,
   },
 
   metricValue: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 700,
   },
 
-  /* CHARTS */
+  section: { display: "flex", flexDirection: "column", gap: 10 },
+
+  sectionTitle: { fontSize: 18, fontWeight: 700 },
+
   chartGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
@@ -282,9 +351,24 @@ const styles = {
     padding: 16,
   },
 
-  chartTitle: {
-    fontSize: 16,
-    fontWeight: 600,
-    marginBottom: 12,
+  chartTitle: { fontSize: 16, fontWeight: 600, marginBottom: 10 },
+
+  tableCard: {
+    background: "#0b1020",
+    border: "1px solid #172033",
+    borderRadius: 18,
+    padding: 16,
+  },
+
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+  },
+
+  zoneRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    padding: "8px 0",
+    borderBottom: "1px solid #172033",
   },
 };
