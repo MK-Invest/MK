@@ -51,10 +51,10 @@ export function MetricsGrid({ data }) {
 
   const getValue = (key) => {
     return (
-      ttm?.[key] ??
-      fundamentals?.[key] ??
-      technical?.[key] ??
-      metrics?.trend?.[key]
+      data?.metrics?.ttm?.[key] ??
+      data?.fundamentals?.[key] ??
+      data?.technical?.[key] ??
+      data?.metrics?.trend?.[key]
     );
   };
   const history = fundamentals?.history ?? {};
