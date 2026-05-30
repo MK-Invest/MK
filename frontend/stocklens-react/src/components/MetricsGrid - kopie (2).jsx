@@ -146,10 +146,65 @@ export function MetricsGrid({ data }) {
           const chartData = buildChartData(chart.key);
 
           return (
-  <div style={{color:"red", fontSize:50}}>
-    THIS IS NEW METRICS GRID BUILD
-  </div>
-);
+            <div key={chart.key} style={styles.chartCard}>
+              <div style={styles.chartTitle}>{chart.label}</div>
+
+              <ResponsiveContainer width="100%" height={240}>
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient
+                      id={`gradient-${chart.key}`}
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
+                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+
+                  <CartesianGrid stroke="#172033" vertical={false} />
+
+                  <XAxis
+                    dataKey="date"
+                    stroke="#475569"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: 11 }}
+                  />
+
+                  <YAxis
+                    stroke="#475569"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: 11 }}
+                  />
+
+                  <Tooltip
+                    contentStyle={{
+                      background: "#0b1020",
+                      border: "1px solid #1e293b",
+                      borderRadius: 14,
+                      color: "white",
+                    }}
+                  />
+
+                  <Area
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#22c55e"
+                    fill={`url(#gradient-${chart.key})`}
+                    strokeWidth={2.5}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 const styles = {
