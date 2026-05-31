@@ -440,16 +440,15 @@ export function StockDashboard({ data }) {
             {zones.demand?.length > 0 && (
               <div style={{ marginTop: 16 }}>
                 <div style={{ fontSize: 11, color: "#4ADE80", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
-                  ▼ Klíčové supporty — poptávkové zóny (týdenní TF)
+                  ▼ Demand zóny (týdenní swing low → denní anchor svíčka)
                 </div>
                 <table style={S.table}>
                   <thead>
                     <tr>
                       <th style={S.th}>Zóna (low – high)</th>
-                      <th style={S.th}>Střed zóny</th>
-                      <th style={S.th}>Síla</th>
-                      <th style={S.th}>Dotyků</th>
-                      <th style={S.th}>Datum(y)</th>
+                      <th style={S.th}>Střed</th>
+                      <th style={S.th}>Anchor svíčka</th>
+                      <th style={S.th}>Týden swingu</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -459,9 +458,8 @@ export function StockDashboard({ data }) {
                           {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
                         </td>
                         <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
-                        <td style={S.td}>{z.strength != null ? `${(z.strength * 100).toFixed(1)} %` : "—"}</td>
-                        <td style={S.td}>{z.touch_count}×</td>
-                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{(z.dates || []).join(", ")}</td>
+                        <td style={{ ...S.td, color: "#94A3B8" }}>{z.anchor_date ?? "—"}</td>
+                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.week_date ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -473,16 +471,15 @@ export function StockDashboard({ data }) {
             {zones.supply?.length > 0 && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontSize: 11, color: "#F87171", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
-                  ▲ Klíčové rezistence — nabídkové zóny (týdenní TF)
+                  ▲ Supply zóny (týdenní swing high → denní anchor svíčka)
                 </div>
                 <table style={S.table}>
                   <thead>
                     <tr>
                       <th style={S.th}>Zóna (low – high)</th>
-                      <th style={S.th}>Střed zóny</th>
-                      <th style={S.th}>Síla</th>
-                      <th style={S.th}>Dotyků</th>
-                      <th style={S.th}>Datum(y)</th>
+                      <th style={S.th}>Střed</th>
+                      <th style={S.th}>Anchor svíčka</th>
+                      <th style={S.th}>Týden swingu</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -492,9 +489,8 @@ export function StockDashboard({ data }) {
                           {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
                         </td>
                         <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
-                        <td style={S.td}>{z.strength != null ? `${(z.strength * 100).toFixed(1)} %` : "—"}</td>
-                        <td style={S.td}>{z.touch_count}×</td>
-                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{(z.dates || []).join(", ")}</td>
+                        <td style={{ ...S.td, color: "#94A3B8" }}>{z.anchor_date ?? "—"}</td>
+                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.week_date ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
