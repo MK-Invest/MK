@@ -457,7 +457,7 @@ async def debug(ticker: str):
     gaap = data["facts"].get("us-gaap", {})
     dei  = data["facts"].get("dei", {})
 
-    # Revenue koncepty
+    # Revenue
     revenue_concepts = [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
@@ -468,23 +468,23 @@ async def debug(ticker: str):
         items = gaap.get(c, {}).get("units", {}).get("USD", [])
         recent = [i for i in items if i.get("end", "") >= "2024-01-01"]
         recent.sort(key=lambda x: x.get("end", ""), reverse=True)
-        result[c] = recent[:8]
+        result[c] = recent[:6]
 
-    # Shares koncepty
-    share_concepts = [
-        "WeightedAverageNumberOfDilutedSharesOutstanding",
-        "WeightedAverageNumberOfSharesOutstandingBasic",
-        "CommonStockSharesOutstanding",
-        "EntityCommonStockSharesOutstanding",
+    # Depreciation
+    dep_concepts = [
+        "DepreciationAndAmortization",
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAmortizationAndAccretion",
+        "Depreciation",
     ]
-    shares_result = {}
-    for c in share_concepts:
-        items = (gaap.get(c) or dei.get(c) or {}).get("units", {}).get("shares", [])
-        recent = [i for i in items if i.get("end", "") >= "2024-01-01"]
+    dep_result = {}
+    for c in dep_concepts:
+        items = gaap.get(c, {}).get("units", {}).get("USD", [])
+        recent = [i for i in items if i.get("end", "") >= "2023-01-01"]
         recent.sort(key=lambda x: x.get("end", ""), reverse=True)
-        shares_result[c] = recent[:3]
-
-    result["_shares"] = shares_result
+        dep_result[c] = recent[:6]
+    
+    result["_depreciation"] = dep_result
     return result
 
 @app.post("/screener")
