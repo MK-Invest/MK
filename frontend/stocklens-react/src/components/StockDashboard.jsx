@@ -440,24 +440,28 @@ export function StockDashboard({ data }) {
             {zones.demand?.length > 0 && (
               <div style={{ marginTop: 16 }}>
                 <div style={{ fontSize: 11, color: "#4ADE80", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
-                  ▼ Klíčové supporty (poptávkové zóny)
+                  ▼ Klíčové supporty — poptávkové zóny (týdenní TF)
                 </div>
                 <table style={S.table}>
                   <thead>
                     <tr>
-                      <th style={S.th}>Cena</th>
+                      <th style={S.th}>Zóna (low – high)</th>
+                      <th style={S.th}>Střed zóny</th>
                       <th style={S.th}>Síla</th>
-                      <th style={S.th}>Počet dotyků</th>
-                      <th style={S.th}>Datum(y) dotyku</th>
+                      <th style={S.th}>Dotyků</th>
+                      <th style={S.th}>Datum(y)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {zones.demand.map((z, i) => (
                       <tr key={i}>
-                        <td style={{ ...S.td, ...S.pos }}>{z.price.toFixed(2)} USD</td>
-                        <td style={S.td}>{(z.strength * 100).toFixed(1)} %</td>
+                        <td style={{ ...S.td, ...S.pos, fontWeight: 600 }}>
+                          {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
+                        </td>
+                        <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
+                        <td style={S.td}>{z.strength != null ? `${(z.strength * 100).toFixed(1)} %` : "—"}</td>
                         <td style={S.td}>{z.touch_count}×</td>
-                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.dates.join(", ")}</td>
+                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{(z.dates || []).join(", ")}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -469,24 +473,28 @@ export function StockDashboard({ data }) {
             {zones.supply?.length > 0 && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontSize: 11, color: "#F87171", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
-                  ▲ Klíčové rezistence (nabídkové zóny)
+                  ▲ Klíčové rezistence — nabídkové zóny (týdenní TF)
                 </div>
                 <table style={S.table}>
                   <thead>
                     <tr>
-                      <th style={S.th}>Cena</th>
+                      <th style={S.th}>Zóna (low – high)</th>
+                      <th style={S.th}>Střed zóny</th>
                       <th style={S.th}>Síla</th>
-                      <th style={S.th}>Počet dotyků</th>
-                      <th style={S.th}>Datum(y) dotyku</th>
+                      <th style={S.th}>Dotyků</th>
+                      <th style={S.th}>Datum(y)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {zones.supply.map((z, i) => (
                       <tr key={i}>
-                        <td style={{ ...S.td, ...S.neg }}>{z.price.toFixed(2)} USD</td>
-                        <td style={S.td}>{(z.strength * 100).toFixed(1)} %</td>
+                        <td style={{ ...S.td, ...S.neg, fontWeight: 600 }}>
+                          {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
+                        </td>
+                        <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
+                        <td style={S.td}>{z.strength != null ? `${(z.strength * 100).toFixed(1)} %` : "—"}</td>
                         <td style={S.td}>{z.touch_count}×</td>
-                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.dates.join(", ")}</td>
+                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{(z.dates || []).join(", ")}</td>
                       </tr>
                     ))}
                   </tbody>

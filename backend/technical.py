@@ -1,12 +1,9 @@
 """
 technical.py — Technická analýza z OHLCV dat
 =============================================
-Vstup:  seznam OHLCV záznamů z TwelveData (nejnovější první)
-Výstup: RSI, klouzavé průměry, demand/supply zóny
-
-Formát TwelveData záznamu:
-  {"datetime": "2025-05-28", "open": "...", "high": "...",
-   "low": "...", "close": "...", "volume": "..."}
+RSI, MA, SMA — denní svíčky (200 dní)
+Demand/Supply zóny — týdenní svíčky (resampleované z denních)
+  Zóna = rozsah low–high swingové svíčky
 """
 
 from __future__ import annotations
@@ -19,7 +16,6 @@ from typing import Optional
 # =========================================================
 
 def _f(x) -> Optional[float]:
-    """Bezpečný float převod."""
     try:
         v = float(x)
         return None if (math.isnan(v) or math.isinf(v)) else v
@@ -30,11 +26,10 @@ def _f(x) -> Optional[float]:
 def _parse_ohlcv(raw: list[dict]) -> list[dict]:
     """
     Převede raw TwelveData záznamy na čisté floaty.
-    Vstup je nejnovější první → obrátíme na chronologické pořadí
-    pro výpočty (nejstarší první).
+    Vstup nejnovější první → obrátíme na chronologické pořadí.
     """
     parsed = []
-    for r in reversed(raw):   # chronologicky: nejstarší první
+    for r in reversed(raw):
         o = _f(r.get("open"))
         h = _f(r.get("high"))
         l = _f(r.get("low"))
@@ -53,17 +48,68 @@ def _parse_ohlcv(raw: list[dict]) -> list[dict]:
 
 
 # =========================================================
+# WEEKLY RESAMPLE
+# =========================================================
+
+def _resample_weekly(candles: list[dict]) -> list[dict]:
+    """
+    Resampleuje denní OHLCV na týdenní svíčky (pondělí–pátek).
+    Vstup musí být chronologicky vzestupně (nejstarší první).
+
+    Každá týdenní svíčka:
+      open   = open prvního dne týdne
+      high   = max(high) za celý týden
+      low    = min(low)  za celý týden
+      close  = close posledního dne týdne
+      volume = součet volume
+      date   = datum posledního dne (pátek nebo poslední obchodní den)
+    """
+    from datetime import date as _date
+
+    if not candles:
+        return []
+
+    def week_key(date_str: str) -> str:
+        """ISO rok-týden jako klíč skupiny."""
+        try:
+            d = _date.fromisoformat(date_str)
+            iso = d.isocalendar()
+            return f"{iso[0]}-W{iso[1]:02d}"
+        except Exception:
+            return date_str[:7]   # fallback: YYYY-MM
+
+    from collections import OrderedDict
+    weeks: OrderedDict = OrderedDict()
+
+    for c in candles:
+        wk = week_key(c["date"])
+        if wk not in weeks:
+            weeks[wk] = {
+                "date":   c["date"],
+                "open":   c["open"],
+                "high":   c["high"],
+                "low":    c["low"],
+                "close":  c["close"],
+                "volume": c["volume"],
+            }
+        else:
+            w = weeks[wk]
+            w["high"]   = max(w["high"],   c["high"])
+            w["low"]    = min(w["low"],    c["low"])
+            w["close"]  = c["close"]       # poslední close týdne
+            w["volume"] += c["volume"]
+            w["date"]   = c["date"]        # poslední datum týdne
+
+    return list(weeks.values())
+
+
+# =========================================================
 # RSI
 # =========================================================
 
 def compute_rsi(candles: list[dict], period: int = 14) -> Optional[float]:
     """
-    Wilderův RSI (stejný jako TradingView, Yahoo Finance).
-
-    Fáze 1: první průměrný gain/loss = prostý průměr prvních `period` změn
-    Fáze 2: exponenciální vyhlazení (Wilder) pro zbytek série
-
-    Vrátí RSI posledního dne (0–100).
+    Wilderův RSI — stejný jako TradingView a Yahoo Finance.
     """
     closes = [c["close"] for c in candles]
     if len(closes) < period + 1:
@@ -71,25 +117,20 @@ def compute_rsi(candles: list[dict], period: int = 14) -> Optional[float]:
 
     changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
 
-    # Fáze 1: seed průměry
-    gains = [max(c, 0) for c in changes[:period]]
+    gains  = [max(c, 0)  for c in changes[:period]]
     losses = [abs(min(c, 0)) for c in changes[:period]]
-    avg_gain = sum(gains) / period
+    avg_gain = sum(gains)  / period
     avg_loss = sum(losses) / period
 
-    # Fáze 2: Wilderovo vyhlazení
     for change in changes[period:]:
-        gain  = max(change, 0)
-        loss  = abs(min(change, 0))
-        avg_gain = (avg_gain * (period - 1) + gain)  / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period
+        avg_gain = (avg_gain * (period - 1) + max(change, 0))       / period
+        avg_loss = (avg_loss * (period - 1) + abs(min(change, 0))) / period
 
     if avg_loss == 0:
         return 100.0
 
     rs  = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi, 2)
+    return round(100 - (100 / (1 + rs)), 2)
 
 
 # =========================================================
@@ -97,7 +138,6 @@ def compute_rsi(candles: list[dict], period: int = 14) -> Optional[float]:
 # =========================================================
 
 def compute_sma(candles: list[dict], period: int) -> Optional[float]:
-    """Simple Moving Average posledních `period` svíček."""
     closes = [c["close"] for c in candles]
     if len(closes) < period:
         return None
@@ -105,16 +145,12 @@ def compute_sma(candles: list[dict], period: int) -> Optional[float]:
 
 
 def compute_ema(candles: list[dict], period: int) -> Optional[float]:
-    """
-    Exponential Moving Average — stejný výpočet jako TradingView.
-    Seed = SMA prvních `period` svíček.
-    """
     closes = [c["close"] for c in candles]
     if len(closes) < period:
         return None
 
-    k    = 2 / (period + 1)
-    ema  = sum(closes[:period]) / period   # seed = SMA
+    k   = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
 
     for price in closes[period:]:
         ema = price * k + ema * (1 - k)
@@ -123,18 +159,17 @@ def compute_ema(candles: list[dict], period: int) -> Optional[float]:
 
 
 # =========================================================
-# SWING DETECTION
+# SWING DETECTION (pro týdenní svíčky)
 # =========================================================
 
-def _find_swings(candles: list[dict], lookback: int = 5) -> tuple[list, list]:
+def _find_swings(candles: list[dict], lookback: int = 3) -> tuple[list, list]:
     """
-    Identifikuje swing highs a swing lows.
+    Najde swing lows a highs.
+    Pro týdenní svíčky stačí lookback=3 (±3 týdny).
 
-    Swing high: svíčka jejíž `high` je nejvyšší v okně ±lookback svíček
-    Swing low:  svíčka jejíž `low`  je nejnižší v okně ±lookback svíček
-
-    Vrátí (swing_lows, swing_highs) — každý item:
-      {"idx": int, "date": str, "price": float, "strength": float, "volume": float}
+    Každý swing nese:
+      price_low  / price_high  — extrém swingové svíčky
+      candle_low / candle_high — celý rozsah svíčky (pro zónový rozsah)
     """
     n = len(candles)
     swing_lows  = []
@@ -146,51 +181,50 @@ def _find_swings(candles: list[dict], lookback: int = 5) -> tuple[list, list]:
 
         c = candles[i]
 
-        # Swing low
+        # Swing low — low svíčky je nejnižší v okně
         if c["low"] < min(window_lows):
-            # Síla = jak daleko cena od tohoto swingu odskočila
-            # Měříme maximální vzdálenost close cen v následujících lookback svíčkách
             future_closes = [candles[j]["close"] for j in range(i + 1, min(i + lookback + 1, n))]
             if future_closes:
-                max_move = max(future_closes) - c["low"]
-                strength = max_move / c["low"]   # relativní pohyb
+                strength = (max(future_closes) - c["low"]) / c["low"]
             else:
                 strength = 0.0
 
             swing_lows.append({
-                "idx":      i,
-                "date":     c["date"],
-                "price":    c["low"],
-                "strength": round(strength, 4),
-                "volume":   c["volume"],
+                "idx":         i,
+                "date":        c["date"],
+                "price":       c["low"],          # referenční cena pro třídění/clustering
+                "candle_low":  c["low"],           # spodní hranice zóny
+                "candle_high": c["high"],          # horní hranice zóny
+                "strength":    round(strength, 4),
+                "volume":      c["volume"],
             })
 
-        # Swing high
+        # Swing high — high svíčky je nejvyšší v okně
         if c["high"] > max(window_highs):
             future_closes = [candles[j]["close"] for j in range(i + 1, min(i + lookback + 1, n))]
             if future_closes:
-                max_move = c["high"] - min(future_closes)
-                strength = max_move / c["high"]
+                strength = (c["high"] - min(future_closes)) / c["high"]
             else:
                 strength = 0.0
 
             swing_highs.append({
-                "idx":      i,
-                "date":     c["date"],
-                "price":    c["high"],
-                "strength": round(strength, 4),
-                "volume":   c["volume"],
+                "idx":         i,
+                "date":        c["date"],
+                "price":       c["high"],
+                "candle_low":  c["low"],
+                "candle_high": c["high"],
+                "strength":    round(strength, 4),
+                "volume":      c["volume"],
             })
 
     return swing_lows, swing_highs
 
 
-def _cluster_levels(levels: list[dict], tolerance_pct: float = 0.015) -> list[dict]:
+def _cluster_zones(levels: list[dict], tolerance_pct: float = 0.025) -> list[dict]:
     """
-    Sloučí blízké swingové úrovně do zón (tolerance = 1.5 % ceny).
-    Výsledná zóna má cenu = váženou průměr (váha = strength × volume).
-
-    Vrátí seznam zón seřazených podle ceny vzestupně.
+    Sloučí blízké swingy do zón (tolerance 2.5 % pro týdenní TF).
+    Každá zóna má rozsah low–high = min(candle_low) až max(candle_high)
+    všech svíček ve skupině.
     """
     if not levels:
         return []
@@ -210,74 +244,68 @@ def _cluster_levels(levels: list[dict], tolerance_pct: float = 0.015) -> list[di
 
     result = []
     for cluster in clusters:
-        # Váha = strength + normalizovaný volume bonus
-        max_vol = max(c["volume"] for c in cluster) or 1
-        weights = [
-            c["strength"] + 0.3 * (c["volume"] / max_vol)
-            for c in cluster
-        ]
-        total_w = sum(weights) or 1
-        avg_price = sum(c["price"] * w for c, w in zip(cluster, weights)) / total_w
-        avg_strength = sum(c["strength"] for c in cluster) / len(cluster)
-        total_volume = sum(c["volume"] for c in cluster)
-        touch_count  = len(cluster)
+        max_vol  = max(c["volume"] for c in cluster) or 1
+        weights  = [c["strength"] + 0.3 * (c["volume"] / max_vol) for c in cluster]
+        total_w  = sum(weights) or 1
+
+        avg_strength  = sum(c["strength"] for c in cluster) / len(cluster)
+        total_volume  = sum(c["volume"] for c in cluster)
+        touch_count   = len(cluster)
+
+        # Zónový rozsah = min low až max high všech svíček
+        zone_low  = round(min(c["candle_low"]  for c in cluster), 4)
+        zone_high = round(max(c["candle_high"] for c in cluster), 4)
+        # Střed zóny pro třídění
+        zone_mid  = round((zone_low + zone_high) / 2, 4)
 
         result.append({
-            "price":       round(avg_price, 4),
+            "zone_low":    zone_low,
+            "zone_high":   zone_high,
+            "zone_mid":    zone_mid,
             "strength":    round(avg_strength, 4),
             "volume":      total_volume,
             "touch_count": touch_count,
             "dates":       [c["date"] for c in cluster],
         })
 
-    return sorted(result, key=lambda x: x["price"])
+    return sorted(result, key=lambda x: x["zone_mid"])
 
 
 # =========================================================
-# DEMAND / SUPPLY ZONES
+# DEMAND / SUPPLY ZONES (týdenní)
 # =========================================================
 
 def compute_zones(
-    candles: list[dict],
+    weekly_candles: list[dict],
     current_price: float,
-    lookback: int     = 5,
-    min_strength: float = 0.015,   # min. 1.5 % pohyb od swingu
-    n_zones: int      = 3,         # počet nejbližších zón na každé straně
+    lookback: int       = 3,
+    min_strength: float = 0.02,   # min. 2 % pro týdenní TF
+    n_zones: int        = 3,
 ) -> dict:
     """
-    Identifikuje demand (support) a supply (resistance) zóny.
-
-    Algoritmus:
-    1. Najdi swing lows/highs s lookback oknem
-    2. Odfiltruj slabé swingy (strength < min_strength)
-    3. Seskup blízké úrovně do zón (±1.5 %)
-    4. Vrať n_zones nejbližších pod a nad aktuální cenou
-
-    Výstup:
-      demand: [{price, strength, volume, touch_count, dates}, ...]  ← pod cenou
-      supply: [{price, strength, volume, touch_count, dates}, ...]  ← nad cenou
+    Demand/supply zóny z týdenních svíček.
+    Každá zóna = {zone_low, zone_high, zone_mid, strength, volume, touch_count, dates}
     """
-    swing_lows, swing_highs = _find_swings(candles, lookback)
+    swing_lows, swing_highs = _find_swings(weekly_candles, lookback)
 
-    # Filtruj podle síly
     strong_lows  = [s for s in swing_lows  if s["strength"] >= min_strength]
     strong_highs = [s for s in swing_highs if s["strength"] >= min_strength]
 
-    # Seskup do zón
-    demand_zones = _cluster_levels(strong_lows)
-    supply_zones = _cluster_levels(strong_highs)
+    demand_zones = _cluster_zones(strong_lows)
+    supply_zones = _cluster_zones(strong_highs)
 
-    # Rozděl na pod/nad cenou
-    demand = [z for z in demand_zones if z["price"] < current_price]
-    supply = [z for z in supply_zones if z["price"] > current_price]
+    # Demand = zóny jejichž střed je pod cenou
+    demand = [z for z in demand_zones if z["zone_mid"] < current_price]
+    supply = [z for z in supply_zones if z["zone_mid"] > current_price]
 
-    # Nejbližší zóny (demand sestupně = nejblíže ceně první, supply vzestupně)
-    demand_sorted = sorted(demand, key=lambda x: x["price"], reverse=True)[:n_zones]
-    supply_sorted = sorted(supply, key=lambda x: x["price"])[:n_zones]
+    # Nejbližší zóny
+    demand_sorted = sorted(demand, key=lambda x: x["zone_mid"], reverse=True)[:n_zones]
+    supply_sorted = sorted(supply, key=lambda x: x["zone_mid"])[:n_zones]
 
     return {
-        "demand": demand_sorted,
-        "supply": supply_sorted,
+        "demand":    demand_sorted,
+        "supply":    supply_sorted,
+        "timeframe": "weekly",
     }
 
 
@@ -287,64 +315,49 @@ def compute_zones(
 
 def compute_technical(raw_ohlcv: list[dict], current_price: float) -> dict:
     """
-    Spustí kompletní technickou analýzu z raw TwelveData OHLCV dat.
+    Vstup: raw TwelveData denní OHLCV (nejnovější první), aktuální cena.
 
-    Vstup:
-      raw_ohlcv     — seznam diktů z TwelveData (nejnovější první)
-      current_price — aktuální cena (z posledního close nebo quote)
-
-    Výstup:
-      {
-        rsi:          float,           # 14-denní RSI
-        sma_50:       float,
-        sma_200:      float,
-        ema_20:       float,
-        trend:        "bullish"|"bearish"|"neutral",
-        zones:        {demand: [...], supply: [...]},
-        candle_count: int,
-      }
+    RSI + MA — počítají se z denních svíček.
+    Demand/Supply zóny — počítají se z týdenních svíček
+                         (resampleovaných z denních dat).
     """
-    candles = _parse_ohlcv(raw_ohlcv)
+    candles = _parse_ohlcv(raw_ohlcv)   # chronologicky vzestupně
 
     if len(candles) < 20:
-        return {"error": "Nedostatek dat pro technickou analýzu", "candle_count": len(candles)}
+        return {"error": "Nedostatek dat", "candle_count": len(candles)}
 
+    # ── Denní indikátory ─────────────────────────────────
     rsi     = compute_rsi(candles, period=14)
     sma_50  = compute_sma(candles, 50)
     sma_200 = compute_sma(candles, 200)
     ema_20  = compute_ema(candles, 20)
 
-    # Trend určení: cena vs. klouzavé průměry
     above_ema20  = current_price > ema_20  if ema_20  else None
     above_sma50  = current_price > sma_50  if sma_50  else None
     above_sma200 = current_price > sma_200 if sma_200 else None
 
-    bullish_signals = sum(1 for x in [above_ema20, above_sma50, above_sma200] if x is True)
-    bearish_signals = sum(1 for x in [above_ema20, above_sma50, above_sma200] if x is False)
+    bullish = sum(1 for x in [above_ema20, above_sma50, above_sma200] if x is True)
+    bearish = sum(1 for x in [above_ema20, above_sma50, above_sma200] if x is False)
+    trend   = "bullish" if bullish >= 2 else "bearish" if bearish >= 2 else "neutral"
 
-    if bullish_signals >= 2:
-        trend = "bullish"
-    elif bearish_signals >= 2:
-        trend = "bearish"
-    else:
-        trend = "neutral"
-
-    zones = compute_zones(candles, current_price)
+    # ── Týdenní zóny ─────────────────────────────────────
+    weekly = _resample_weekly(candles)
+    zones  = compute_zones(weekly, current_price) if len(weekly) >= 10 else {"demand": [], "supply": [], "timeframe": "weekly"}
 
     result = {
-        "rsi":          rsi,
-        "sma_50":       sma_50,
-        "sma_200":      sma_200,
-        "ema_20":       ema_20,
-        "trend":        trend,
-        "above_ema20":  above_ema20,
-        "above_sma50":  above_sma50,
-        "above_sma200": above_sma200,
-        "zones":        zones,
-        "candle_count": len(candles),
+        "rsi":           rsi,
+        "sma_50":        sma_50,
+        "sma_200":       sma_200,
+        "ema_20":        ema_20,
+        "trend":         trend,
+        "above_ema20":   above_ema20,
+        "above_sma50":   above_sma50,
+        "above_sma200":  above_sma200,
+        "zones":         zones,
+        "candle_count":  len(candles),
+        "weekly_count":  len(weekly),
     }
 
-    # RSI signály
     if rsi is not None:
         result["rsi_signal"] = (
             "oversold"   if rsi < 30 else
