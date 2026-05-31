@@ -162,59 +162,109 @@ def compute_ema(candles: list[dict], period: int) -> Optional[float]:
 # SWING DETECTION (pro týdenní svíčky)
 # =========================================================
 
-def _find_swings(candles: list[dict], lookback: int = 3) -> tuple[list, list]:
-    """
-    Najde swing lows a highs.
-    Pro týdenní svíčky stačí lookback=3 (±3 týdny).
+def _week_key(date_str: str) -> str:
+    """ISO rok-týden jako klíč."""
+    from datetime import date as _date
+    try:
+        d = _date.fromisoformat(date_str)
+        iso = d.isocalendar()
+        return f"{iso[0]}-W{iso[1]:02d}"
+    except Exception:
+        return date_str[:7]
 
-    Každý swing nese:
-      price_low  / price_high  — extrém swingové svíčky
-      candle_low / candle_high — celý rozsah svíčky (pro zónový rozsah)
+
+def _find_swings(
+    weekly: list[dict],
+    daily:  list[dict],
+    lookback: int = 3,
+) -> tuple[list, list]:
     """
-    n = len(candles)
+    Swing lows na týdenních svíčkách, zóny zpřesněné denními daty.
+
+    Podmínka swing low:
+      - weekly[i].low je nejnižší v okně ±lookback
+      - weekly[i-1].low >= weekly[i].low  (předchozí týden nesmí mít nižší low)
+
+    Zóna demand:
+      zone_low  = low  denní svíčky s nejnižším low v daném týdnu
+      zone_high = high TÉ SAMÉ denní svíčky (ne nejvyšší high týdne)
+
+    Podmínka swing high (symetricky):
+      - weekly[i].high je nejvyšší v okně ±lookback
+      - weekly[i-1].high <= weekly[i].high
+
+    Zóna supply:
+      zone_low  = low  denní svíčky s nejvyšším high v daném týdnu
+      zone_high = high TÉ SAMÉ denní svíčky
+    """
+    from collections import defaultdict
+
+    # Seskup denní svíčky podle ISO týdne
+    daily_by_week: dict = defaultdict(list)
+    for c in daily:
+        daily_by_week[_week_key(c["date"])].append(c)
+
+    n = len(weekly)
     swing_lows  = []
     swing_highs = []
 
     for i in range(lookback, n - lookback):
-        window_highs = [candles[j]["high"] for j in range(i - lookback, i + lookback + 1) if j != i]
-        window_lows  = [candles[j]["low"]  for j in range(i - lookback, i + lookback + 1) if j != i]
+        window_highs = [weekly[j]["high"] for j in range(i - lookback, i + lookback + 1) if j != i]
+        window_lows  = [weekly[j]["low"]  for j in range(i - lookback, i + lookback + 1) if j != i]
 
-        c = candles[i]
+        w    = weekly[i]
+        prev = weekly[i - 1]
+        wk   = _week_key(w["date"])
+        day_candles = daily_by_week.get(wk, [])
 
-        # Swing low — low svíčky je nejnižší v okně
-        if c["low"] < min(window_lows):
-            future_closes = [candles[j]["close"] for j in range(i + 1, min(i + lookback + 1, n))]
-            if future_closes:
-                strength = (max(future_closes) - c["low"]) / c["low"]
+        # ── Swing low ────────────────────────────────────
+        # Podmínky: nejnižší low v okně + předchozí týden nesmí mít nižší low
+        if w["low"] < min(window_lows) and prev["low"] >= w["low"]:
+            future_closes = [weekly[j]["close"] for j in range(i + 1, min(i + lookback + 1, n))]
+            strength = (max(future_closes) - w["low"]) / w["low"] if future_closes else 0.0
+
+            if day_candles:
+                # Denní svíčka s nejnižším low toho týdne
+                anchor   = min(day_candles, key=lambda c: c["low"])
+                zone_lo  = anchor["low"]   # low ankrové svíčky
+                zone_hi  = anchor["high"]  # high TÉ SAMÉ svíčky
             else:
-                strength = 0.0
+                zone_lo = w["low"]
+                zone_hi = w["high"]
 
             swing_lows.append({
                 "idx":         i,
-                "date":        c["date"],
-                "price":       c["low"],          # referenční cena pro třídění/clustering
-                "candle_low":  c["low"],           # spodní hranice zóny
-                "candle_high": c["high"],          # horní hranice zóny
+                "date":        w["date"],
+                "price":       w["low"],
+                "candle_low":  zone_lo,
+                "candle_high": zone_hi,
                 "strength":    round(strength, 4),
-                "volume":      c["volume"],
+                "volume":      w["volume"],
             })
 
-        # Swing high — high svíčky je nejvyšší v okně
-        if c["high"] > max(window_highs):
-            future_closes = [candles[j]["close"] for j in range(i + 1, min(i + lookback + 1, n))]
-            if future_closes:
-                strength = (c["high"] - min(future_closes)) / c["high"]
+        # ── Swing high ───────────────────────────────────
+        # Podmínky: nejvyšší high v okně + předchozí týden nesmí mít vyšší high
+        if w["high"] > max(window_highs) and prev["high"] <= w["high"]:
+            future_closes = [weekly[j]["close"] for j in range(i + 1, min(i + lookback + 1, n))]
+            strength = (w["high"] - min(future_closes)) / w["high"] if future_closes else 0.0
+
+            if day_candles:
+                # Denní svíčka s nejvyšším high toho týdne
+                anchor   = max(day_candles, key=lambda c: c["high"])
+                zone_lo  = anchor["low"]   # low ankrové svíčky
+                zone_hi  = anchor["high"]  # high TÉ SAMÉ svíčky
             else:
-                strength = 0.0
+                zone_lo = w["low"]
+                zone_hi = w["high"]
 
             swing_highs.append({
                 "idx":         i,
-                "date":        c["date"],
-                "price":       c["high"],
-                "candle_low":  c["low"],
-                "candle_high": c["high"],
+                "date":        w["date"],
+                "price":       w["high"],
+                "candle_low":  zone_lo,
+                "candle_high": zone_hi,
                 "strength":    round(strength, 4),
-                "volume":      c["volume"],
+                "volume":      w["volume"],
             })
 
     return swing_lows, swing_highs
@@ -277,16 +327,17 @@ def _cluster_zones(levels: list[dict], tolerance_pct: float = 0.025) -> list[dic
 
 def compute_zones(
     weekly_candles: list[dict],
-    current_price: float,
+    daily_candles:  list[dict],
+    current_price:  float,
     lookback: int       = 3,
-    min_strength: float = 0.02,   # min. 2 % pro týdenní TF
+    min_strength: float = 0.02,
     n_zones: int        = 3,
 ) -> dict:
     """
-    Demand/supply zóny z týdenních svíček.
-    Každá zóna = {zone_low, zone_high, zone_mid, strength, volume, touch_count, dates}
+    Demand/supply zóny z týdenních svíček zpřesněné denními daty.
+    zone_low/zone_high = rozsah ankrové denní svíčky (té s extrémním low/high).
     """
-    swing_lows, swing_highs = _find_swings(weekly_candles, lookback)
+    swing_lows, swing_highs = _find_swings(weekly_candles, daily_candles, lookback)
 
     strong_lows  = [s for s in swing_lows  if s["strength"] >= min_strength]
     strong_highs = [s for s in swing_highs if s["strength"] >= min_strength]
@@ -294,11 +345,9 @@ def compute_zones(
     demand_zones = _cluster_zones(strong_lows)
     supply_zones = _cluster_zones(strong_highs)
 
-    # Demand = zóny jejichž střed je pod cenou
     demand = [z for z in demand_zones if z["zone_mid"] < current_price]
     supply = [z for z in supply_zones if z["zone_mid"] > current_price]
 
-    # Nejbližší zóny
     demand_sorted = sorted(demand, key=lambda x: x["zone_mid"], reverse=True)[:n_zones]
     supply_sorted = sorted(supply, key=lambda x: x["zone_mid"])[:n_zones]
 
@@ -340,9 +389,12 @@ def compute_technical(raw_ohlcv: list[dict], current_price: float) -> dict:
     bearish = sum(1 for x in [above_ema20, above_sma50, above_sma200] if x is False)
     trend   = "bullish" if bullish >= 2 else "bearish" if bearish >= 2 else "neutral"
 
-    # ── Týdenní zóny ─────────────────────────────────────
+    # ── Týdenní zóny zpřesněné denními svíčkami ──────────
     weekly = _resample_weekly(candles)
-    zones  = compute_zones(weekly, current_price) if len(weekly) >= 10 else {"demand": [], "supply": [], "timeframe": "weekly"}
+    if len(weekly) >= 10:
+        zones = compute_zones(weekly, candles, current_price)
+    else:
+        zones = {"demand": [], "supply": [], "timeframe": "weekly"}
 
     result = {
         "rsi":           rsi,
