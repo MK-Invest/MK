@@ -273,8 +273,12 @@ def _find_swings(
 def _cluster_zones(levels: list[dict], tolerance_pct: float = 0.025) -> list[dict]:
     """
     Sloučí blízké swingy do zón (tolerance 2.5 % pro týdenní TF).
-    Každá zóna má rozsah low–high = min(candle_low) až max(candle_high)
-    všech svíček ve skupině.
+
+    zone_low  = nejnižší candle_low  v clusteru (nejhlubší bod)
+    zone_high = candle_high svíčky která má nejnižší candle_low
+                (= high ankrové svíčky nejsilnějšího swingu)
+
+    Tím zone_low/zone_high vždy odpovídají jedné konkrétní denní svíčce.
     """
     if not levels:
         return []
@@ -298,19 +302,19 @@ def _cluster_zones(levels: list[dict], tolerance_pct: float = 0.025) -> list[dic
         weights  = [c["strength"] + 0.3 * (c["volume"] / max_vol) for c in cluster]
         total_w  = sum(weights) or 1
 
-        avg_strength  = sum(c["strength"] for c in cluster) / len(cluster)
-        total_volume  = sum(c["volume"] for c in cluster)
-        touch_count   = len(cluster)
+        avg_strength = sum(c["strength"] for c in cluster) / len(cluster)
+        total_volume = sum(c["volume"] for c in cluster)
+        touch_count  = len(cluster)
 
-        # Zónový rozsah = min low až max high všech svíček
-        zone_low  = round(min(c["candle_low"]  for c in cluster), 4)
-        zone_high = round(max(c["candle_high"] for c in cluster), 4)
-        # Střed zóny pro třídění
-        zone_mid  = round((zone_low + zone_high) / 2, 4)
+        # Ankrová svíčka = ta s nejnižším candle_low v celém clusteru
+        anchor   = min(cluster, key=lambda c: c["candle_low"])
+        zone_lo  = round(anchor["candle_low"],  4)
+        zone_hi  = round(anchor["candle_high"], 4)
+        zone_mid = round((zone_lo + zone_hi) / 2, 4)
 
         result.append({
-            "zone_low":    zone_low,
-            "zone_high":   zone_high,
+            "zone_low":    zone_lo,
+            "zone_high":   zone_hi,
             "zone_mid":    zone_mid,
             "strength":    round(avg_strength, 4),
             "volume":      total_volume,
