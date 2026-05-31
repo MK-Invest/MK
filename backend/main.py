@@ -485,6 +485,25 @@ async def debug(ticker: str):
         dep_result[c] = recent[:6]
     
     result["_depreciation"] = dep_result
+
+    # Přidej do debug endpointu:
+    ni_concepts = ["NetIncomeLoss", "ProfitLoss"]
+    ni_result = {}
+    for c in ni_concepts:
+        items = gaap.get(c, {}).get("units", {}).get("USD", [])
+        recent = [i for i in items if i.get("end", "") >= "2024-01-01"]
+        recent.sort(key=lambda x: x.get("end", ""), reverse=True)
+        ni_result[c] = recent[:6]
+    result["_net_income"] = ni_result
+
+    op_concepts = ["OperatingIncomeLoss"]
+    op_result = {}
+    for c in op_concepts:
+        items = gaap.get(c, {}).get("units", {}).get("USD", [])
+        recent = [i for i in items if i.get("end", "") >= "2024-01-01"]
+        recent.sort(key=lambda x: x.get("end", ""), reverse=True)
+        op_result[c] = recent[:6]
+    result["_operating_income"] = op_result
     return result
 
 @app.post("/screener")
