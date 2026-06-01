@@ -3,18 +3,13 @@ import os
 import time
 import math
 import httpx
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from backend.sec import (
-    get_cik_map,
-    get_company_facts,
-    extract_fundamentals,
-)
-
+from backend.sec import get_cik_map, get_company_facts, extract_fundamentals
+from backend.eu_tickers import load_eu_tickers
 from backend.technical import compute_technical
 from backend.metrics import compute_metrics
 from backend.storage import save_snapshot
@@ -22,7 +17,7 @@ from backend.valuation.model import run_scenarios
 
 load_dotenv()
 
-app = FastAPI(title="StockLens API (SEC-only)")
+app = FastAPI(title="StockLens API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,11 +32,13 @@ app.add_middleware(
 # =========================================================
 
 TD_API_KEY = os.getenv("TWELVEDATA_API_KEY", "")
-
 CACHE_TTL = 300
-_cache = {}
 
-sem = asyncio.Semaphore(10)
+_cache = {}
+_sem = asyncio.Semaphore(10)
+
+_sec_cache = None
+_eu_cache = None
 
 # =========================================================
 # CACHE
@@ -56,27 +53,39 @@ def get_cache(key: str):
         return None
     return v["data"]
 
-
 def set_cache(key: str, data):
     _cache[key] = {"data": data, "time": time.time()}
 
-
 # =========================================================
-# SAFE HTTP
+# HTTP
 # =========================================================
 
-async def safe_get(client: httpx.AsyncClient, url: str, params: dict = None):
+async def safe_get(client: httpx.AsyncClient, url: str, params=None):
     try:
         r = await client.get(url, params=params, timeout=20)
         if r.status_code != 200:
             return None
         return r.json()
-    except Exception:
+    except:
         return None
 
+# =========================================================
+# TICKERS
+# =========================================================
+
+def get_all_tickers():
+    global _sec_cache, _eu_cache
+
+    if _sec_cache is None:
+        _sec_cache = get_cik_map()
+
+    if _eu_cache is None:
+        _eu_cache = load_eu_tickers()
+
+    return _sec_cache, _eu_cache
 
 # =========================================================
-# DATA PROVIDERS
+# TWELVEDATA
 # =========================================================
 
 async def twelvedata_ohlcv(client, ticker: str):
@@ -107,23 +116,13 @@ async def twelvedata_ohlcv(client, ticker: str):
         "confidence": 0.5,
     }
 
-
 # =========================================================
-# SEC LAYER
+# SEC
 # =========================================================
 
-_cik_map_cache = None
-
-
-def get_cik(ticker: str):
-    global _cik_map_cache
-    if _cik_map_cache is None:
-        _cik_map_cache = get_cik_map()
-    return _cik_map_cache.get(ticker.upper())
-
-
-async def get_sec_fundamentals(ticker: str):
-    cik = get_cik(ticker)
+def get_sec_fundamentals(ticker: str):
+    cik_map, _ = get_all_tickers()
+    cik = cik_map.get(ticker.upper())
     if not cik:
         return None
 
@@ -133,13 +132,11 @@ async def get_sec_fundamentals(ticker: str):
 
     return extract_fundamentals(data)
 
-
 # =========================================================
-# MERGE ENGINE (SEC SAFE)
+# MERGE
 # =========================================================
 
-PRIORITY = {"twelvedata": 2, "sec": 1}
-
+PRIORITY = {"twelvedata": 2, "sec": 3, "fmp": 1, "eu": 2}
 
 def merge(*sources):
     out = {}
@@ -151,26 +148,20 @@ def merge(*sources):
 
         src = s.get("source", "unknown")
         conf = s.get("confidence", 0.5)
-        sscore = PRIORITY.get(src, 0) + conf
 
         for k, v in s.items():
             if k in ("source", "confidence") or v is None:
                 continue
 
-            if k == "history":
-                out.setdefault("history", {})
-                out["history"].update(v)
-                continue
-
-            if k not in out or sscore > score.get(k, 0):
+            sscore = PRIORITY.get(src, 0) + conf
+            if k not in out or sscore > score[k]:
                 out[k] = v
                 score[k] = sscore
 
     return out
 
-
 # =========================================================
-# CORE DATA PIPELINE
+# STOCK DATA CORE
 # =========================================================
 
 async def get_stock_data(client, ticker: str):
@@ -180,77 +171,70 @@ async def get_stock_data(client, ticker: str):
 
     td, sec = await asyncio.gather(
         twelvedata_ohlcv(client, ticker),
-        get_sec_fundamentals(ticker),
+        asyncio.to_thread(get_sec_fundamentals, ticker),
     )
-
-    ohlcv = None
-    if td and "ohlcv" in td:
-        ohlcv = td.pop("ohlcv")
 
     merged = merge(td, sec)
 
     merged["ticker"] = ticker
     merged.setdefault("price", None)
+    merged.setdefault("revenue", 0)
     merged.setdefault("shares", None)
 
-    cash = merged.get("cash") or 0
-    debt = merged.get("debt") or 0
-    merged["net_debt"] = merged.get("net_debt") or (debt - cash)
-
-    if ohlcv and merged.get("price"):
+    if td and sec:
         try:
-            merged["technical"] = compute_technical(ohlcv, merged["price"])
-        except Exception:
+            merged["technical"] = compute_technical(td["ohlcv"], merged["price"])
+        except:
             merged["technical"] = None
-    else:
-        merged["technical"] = None
 
     set_cache(ticker, merged)
     save_snapshot(merged)
 
     return merged
 
-
 # =========================================================
-# API SCHEMAS
-# =========================================================
-
-class ScenarioParams(BaseModel):
-    revenue_cagr: float = 0.0
-    ebitda_margin: float = 0.2
-    ev_ebitda_multiple: float = 15.0
-
-
-class ValuationRequest(BaseModel):
-    base: ScenarioParams | None = None
-
-
-# =========================================================
-# ENDPOINTS
+# SEARCH (US + EU)
 # =========================================================
 
-@app.get("/health")
-async def health():
-    return {"ok": True}
+@app.get("/search")
+async def search(query: str):
+    q = query.upper().strip()
 
+    sec, eu = get_all_tickers()
 
-@app.delete("/cache")
-async def clear_cache():
-    _cache.clear()
-    return {"cleared": True}
+    results = []
 
+    # US (SEC)
+    for t in sec:
+        if q in t:
+            results.append({
+                "symbol": t,
+                "name": t,
+                "region": "US"
+            })
+
+    # EU
+    for t, meta in eu.items():
+        if q in t or q in (meta.get("name") or "").upper():
+            results.append({
+                "symbol": t,
+                "name": meta.get("name"),
+                "exchange": meta.get("exchange"),
+                "region": "EU"
+            })
+
+    return results[:20]
+
+# =========================================================
+# COMPANY
+# =========================================================
 
 @app.get("/company/{ticker}")
 async def company(ticker: str):
     async with httpx.AsyncClient() as client:
         d = await get_stock_data(client, ticker.upper())
 
-    metrics_input = {
-        "price": d.get("price"),
-        **d,
-    }
-
-    metrics = compute_metrics(metrics_input)
+    metrics = compute_metrics(d)
 
     return {
         "ticker": ticker.upper(),
@@ -260,26 +244,36 @@ async def company(ticker: str):
         "technical": d.get("technical"),
     }
 
+# =========================================================
+# VALUATION
+# =========================================================
+
+class ScenarioParams(BaseModel):
+    revenue_cagr: float
+    ebitda_margin: float
+    ev_ebitda_multiple: float
+
+class ValuationRequest(BaseModel):
+    required_return: float = 0.12
+    years: int = 2
+    base: ScenarioParams | None = None
 
 @app.post("/valuation/{ticker}")
 async def valuation(ticker: str, body: ValuationRequest):
     async with httpx.AsyncClient() as client:
         d = await get_stock_data(client, ticker.upper())
 
-    shares = d.get("shares")
-    price = d.get("price")
+    if not d.get("price"):
+        raise HTTPException(422, "No price data")
 
-    if not shares:
-        raise HTTPException(422, "Missing shares data")
-    if not price:
-        raise HTTPException(422, "Missing price")
+    shares = d.get("shares") or 1
 
-    base = body.base.model_dump() if body.base else {}
+    base_override = body.base.model_dump() if body.base else {}
 
     input_data = {
         "revenue": d.get("revenue") or 0,
-        "ebitda_margin": base.get("ebitda_margin") or d.get("ebitda_margin") or 0.2,
-        "ev_ebitda_multiple": base.get("ev_ebitda_multiple") or 15.0,
+        "ebitda_margin": base_override.get("ebitda_margin") or 0.2,
+        "ev_ebitda_multiple": base_override.get("ev_ebitda_multiple") or 15,
         "net_debt": d.get("net_debt") or 0,
         "shares": shares,
     }
@@ -288,58 +282,17 @@ async def valuation(ticker: str, body: ValuationRequest):
 
     return {
         "ticker": ticker.upper(),
-        "price": price,
+        "price": d.get("price"),
         "valuation": result,
-        "data": d,
     }
 
+# =========================================================
+# HEALTH
+# =========================================================
 
-@app.post("/screener")
-async def screener(data: dict):
-    tickers = [t.upper() for t in data.get("tickers", [])]
-    if not tickers:
-        raise HTTPException(400, "No tickers")
-
-    results = []
-
-    async with httpx.AsyncClient() as client:
-
-        async def process(t):
-            async with sem:
-                try:
-                    d = await get_stock_data(client, t)
-
-                    if not d.get("shares") or not d.get("price"):
-                        return None
-
-                    res = run_scenarios({
-                        "revenue": d.get("revenue") or 0,
-                        "ebitda_margin": d.get("ebitda_margin") or 0.2,
-                        "ev_ebitda_multiple": 15.0,
-                        "net_debt": d.get("net_debt") or 0,
-                        "shares": d.get("shares"),
-                    })
-
-                    base = (res.get("base") or {}).get("price")
-                    if not base:
-                        return None
-
-                    current = d.get("price")
-                    upside = (base / current - 1) if current else None
-
-                    return {
-                        "ticker": t,
-                        "price": current,
-                        "upside": upside,
-                        "valuation": res,
-                    }
-
-                except Exception:
-                    return None
-
-        out = await asyncio.gather(*(process(t) for t in tickers))
-
-    results = [r for r in out if r]
-    results.sort(key=lambda x: x["upside"], reverse=True)
-
-    return results
+@app.get("/health")
+async def health():
+    return {
+        "ok": True,
+        "twelvedata": bool(TD_API_KEY),
+    }
