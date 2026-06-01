@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from backend.sec import get_cik_map, get_company_facts, extract_fundamentals
 from backend.valuation.model import run_scenarios
+from backend.providers.router import get_provider
+from backend.providers.normalize import normalize_facts
 
 load_dotenv()
 
@@ -29,8 +31,6 @@ app.add_middleware(
 # CONFIG
 # =========================================================
 
-FMP_STABLE = "https://financialmodelingprep.com/stable"
-FMP_API_KEY = os.getenv("FMP_API_KEY", "")
 TD_API_KEY = os.getenv("TWELVEDATA_API_KEY", "4136dbe737214dd49645487ad9f36a04")
 
 CACHE_TTL = 300
@@ -106,6 +106,20 @@ async def safe_get(client: httpx.AsyncClient, url: str, params: dict = None):
 # PROVIDERS
 # =========================================================
 
+# ── EU ────────────────────────────────────
+async def get_unified_facts(symbol: str):
+    provider, id_ = get_provider(symbol)
+
+    if provider is None:
+        return None
+
+    if hasattr(provider, "get_facts"):
+        raw = provider.get_facts(id_)
+    else:
+        return None
+
+    return normalize_facts(raw)
+
 # ── Twelve Data (cena) ────────────────────────────────────
 
 async def twelvedata_ohlcv(client, ticker: str) -> dict | None:
@@ -145,44 +159,6 @@ async def twelvedata_ohlcv(client, ticker: str) -> dict | None:
         "source":   "twelvedata",
         "confidence": 0.5,
     }
-
-# ── FMP (obohacení) ───────────────────────────────────────
-
-async def fmp_fundamentals(client: httpx.AsyncClient, ticker: str) -> dict | None:
-    if not FMP_API_KEY:
-        return None
-
-    try:
-        income, balance = await asyncio.gather(
-            safe_get(
-                client,
-                f"{FMP_STABLE}/income-statement",
-                params={"symbol": ticker, "limit": 1, "apikey": FMP_API_KEY},
-            ),
-            safe_get(
-                client,
-                f"{FMP_STABLE}/balance-sheet-statement",
-                params={"symbol": ticker, "limit": 1, "apikey": FMP_API_KEY},
-            ),
-        )
-
-        inc = (income or [{}])[0]
-        bal = (balance or [{}])[0]
-        debt = safe_float(bal.get("totalDebt")) or 0
-        cash = safe_float(bal.get("cashAndCashEquivalents")) or 0
-
-        return {
-            "revenue": safe_float(inc.get("revenue")),
-            "ebitda": safe_float(inc.get("ebitda")),
-            "net_debt": debt - cash,
-            "source": "fmp",
-            "confidence": 0.6,
-        }
-    except Exception as e:
-        print(f"[fmp_fundamentals] ERROR {ticker}: {repr(e)}")
-        return None
-
-
 
 # =========================================================
 # MERGE ENGINE
@@ -257,18 +233,17 @@ async def get_stock_data(client, ticker: str) -> dict:
     if cached:
         return cached
 
-    td, sec, fmp_fund = await asyncio.gather(
-        twelvedata_ohlcv(client, ticker),       # ← změněno z twelvedata_price
-        get_sec_fundamentals(ticker),
-        fmp_fundamentals(client, ticker),
-    )
+    td_task = twelvedata_ohlcv(client, ticker)
+    sec_task = get_unified_facts(ticker)
+
+    td, sec = await asyncio.gather(td_task, sec_task)
 
     # Odděl OHLCV od price před merge (merge neumí listy)
     ohlcv = None
     if td and "ohlcv" in td:
         ohlcv = td.pop("ohlcv")   # vyjmi z td aby merge dostal jen skaláry
 
-    merged = merge(td, sec, fmp_fund)
+    merged = merge(td, sec)
 
     cash = merged.get("cash") or 0
     debt = merged.get("debt") or 0
@@ -360,17 +335,25 @@ async def search(query: str):
     if _cik_map_cache is None:
         _cik_map_cache = get_cik_map()
 
-    exact = []
-    partial = []
+     results = []
 
+    # US tickers
     for ticker in _cik_map_cache:
-        if ticker == q:
-            exact.append({"symbol": ticker, "name": ticker})
-        elif q in ticker:
-            partial.append({"symbol": ticker, "name": ticker})
+        if q in ticker:
+            results.append({
+                "symbol": ticker,
+                "type": "SEC"
+            })
 
-    results = exact + partial
-    return results[:8]
+    # EU ISIN heuristic
+    if len(q) >= 3:
+        if q.startswith("US") or q.startswith("DE") or q.startswith("FR") or q.startswith("NL"):
+            results.append({
+                "symbol": q,
+                "type": "ESEF/ISIN"
+            })
+
+    return results[:10]
 
 
 @app.get("/company/{ticker}")
