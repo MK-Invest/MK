@@ -414,6 +414,26 @@ async def company(ticker: str):
         "technical":    d.get("technical"),
     }
 
+@app.get("/debug-eu/{ticker}")
+async def debug_eu(ticker: str):
+    async with httpx.AsyncClient() as client:
+        td = await safe_get(
+            client,
+            "https://api.twelvedata.com/time_series",
+            params={"symbol": ticker, "interval": "1day", "outputsize": 5, "apikey": TD_API_KEY},
+        )
+        income = await safe_get(
+            client,
+            f"{FMP_STABLE}/income-statement",
+            params={"symbol": ticker, "period": "quarter", "limit": 2, "apikey": FMP_API_KEY},
+        )
+    return {
+        "td_status": "ok" if td and "values" in td else "fail",
+        "td_sample": (td.get("values", [{}])[0] if td else td),
+        "td_error": td.get("message") if td else None,
+        "fmp_status": "ok" if income else "fail",
+        "fmp_sample": (income[0] if income else income),
+    }
 
 @app.post("/valuation/{ticker}")
 async def valuation(ticker: str, body: ValuationRequest):
