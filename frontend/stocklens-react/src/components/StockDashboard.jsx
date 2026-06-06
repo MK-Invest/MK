@@ -413,67 +413,75 @@ export function StockDashboard({ data }) {
     </tbody>
   </table>
 
-            {/* Support zóny */}
-            {zones.demand?.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 11, color: "#4ADE80", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
-                  ▼ Demand zóny (týdenní swing low → denní anchor svíčka)
-                </div>
-                <table style={S.table}>
-                  <thead>
-                    <tr>
-                      <th style={S.th}>Zóna (low – high)</th>
-                      <th style={S.th}>Střed</th>
-                      <th style={S.th}>Anchor svíčka</th>
-                      <th style={S.th}>Týden swingu</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {zones.demand.map((z, i) => (
-                      <tr key={i}>
-                        <td style={{ ...S.td, ...S.pos, fontWeight: 600 }}>
-                          {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
-                        </td>
-                        <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
-                        <td style={{ ...S.td, color: "#94A3B8" }}>{z.anchor_date ?? "—"}</td>
-                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.week_date ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+{/* SUPPORT ZÓNY */}
+{Array.isArray(zones?.demand) && zones.demand.length > 0 && (
+  <div style={{ marginTop: 16 }}>
+    <div style={{ fontSize: 11, color: "#4ADE80", fontWeight: 600 }}>
+      ▼ Demand zóny
+    </div>
 
-            {/* Resistance zóny */}
-            {zones.supply?.length > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 11, color: "#F87171", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
-                  ▲ Supply zóny (týdenní swing high → denní anchor svíčka)
-                </div>
-                <table style={S.table}>
-                  <thead>
-                    <tr>
-                      <th style={S.th}>Zóna (low – high)</th>
-                      <th style={S.th}>Střed</th>
-                      <th style={S.th}>Anchor svíčka</th>
-                      <th style={S.th}>Týden swingu</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {zones.supply.map((z, i) => (
-                      <tr key={i}>
-                        <td style={{ ...S.td, ...S.neg, fontWeight: 600 }}>
-                          {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
-                        </td>
-                        <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
-                        <td style={{ ...S.td, color: "#94A3B8" }}>{z.anchor_date ?? "—"}</td>
-                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.week_date ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+    <table style={S.table}>
+      <tbody>
+        {zones.demand.map((z, i) => {
+          const low = z?.zone_low ?? z?.low;
+          const high = z?.zone_high ?? z?.high;
+
+          if (low == null || high == null) return null;
+
+          return (
+            <tr key={i}>
+              <td style={{ ...S.td, ...S.pos, fontWeight: 600 }}>
+                {low.toFixed(2)} – {high.toFixed(2)} USD
+              </td>
+              <td style={S.td}>{z?.zone_mid?.toFixed?.(2) ?? "—"}</td>
+              <td style={{ ...S.td, color: "#94A3B8" }}>
+                {z?.anchor_date ?? "—"}
+              </td>
+              <td style={{ ...S.td, color: "#64748B" }}>
+                {z?.week_date ?? "—"}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+)}
+
+{/* RESISTANCE ZÓNY */}
+{Array.isArray(zones?.supply) && zones.supply.length > 0 && (
+  <div style={{ marginTop: 16 }}>
+    <div style={{ fontSize: 11, color: "#F87171", fontWeight: 600 }}>
+      ▲ Supply zóny
+    </div>
+
+    <table style={S.table}>
+      <tbody>
+        {zones.supply.map((z, i) => {
+          const low = z?.zone_low ?? z?.low;
+          const high = z?.zone_high ?? z?.high;
+
+          if (low == null || high == null) return null;
+
+          return (
+            <tr key={i}>
+              <td style={{ ...S.td, ...S.neg, fontWeight: 600 }}>
+                {low.toFixed(2)} – {high.toFixed(2)} USD
+              </td>
+              <td style={S.td}>{z?.zone_mid?.toFixed?.(2) ?? "—"}</td>
+              <td style={{ ...S.td, color: "#94A3B8" }}>
+                {z?.anchor_date ?? "—"}
+              </td>
+              <td style={{ ...S.td, color: "#64748B" }}>
+                {z?.week_date ?? "—"}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+)}
           </Section>
       </div>
     </div>
