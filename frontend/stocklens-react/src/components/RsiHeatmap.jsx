@@ -38,3 +38,5 @@ const RsiHeatmap = ({ rsi }) => {
     </div>
   );
 };
+
+export default RsiHeatmap;
