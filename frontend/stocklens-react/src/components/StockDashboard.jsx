@@ -260,7 +260,7 @@ export function StockDashboard({ data }) {
             </tbody>
           </table>
         </Section>
-/*
+{/*
         {/* ── ODPISY ── */}
         <Section title="Odpisy (Depreciation & Amortization)">
           <table style={S.table}>
@@ -280,7 +280,7 @@ export function StockDashboard({ data }) {
             </tbody>
           </table>
         </Section>
-*/
+*/}
         {/* ── VALUACE PO KVARTÁLECH ── */}
         <Section title="Valuace po jednotlivých kvartálech">
           <table style={S.table}>
