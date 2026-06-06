@@ -427,7 +427,10 @@ export function StockDashboard({ data }) {
           const high = z?.zone_high ?? z?.high;
 
           if (low == null || high == null) return null;
-
+console.log("TECH:", tech);
+console.log("ZONES:", zones);
+console.log("DEMAND:", zones?.demand);
+console.log("SUPPLY:", zones?.supply);
           return (
             <tr key={i}>
               <td style={{ ...S.td, ...S.pos, fontWeight: 600 }}>
@@ -462,7 +465,10 @@ export function StockDashboard({ data }) {
           const high = z?.zone_high ?? z?.high;
 
           if (low == null || high == null) return null;
-
+console.log("TECH:", tech);
+console.log("ZONES:", zones);
+console.log("DEMAND:", zones?.demand);
+console.log("SUPPLY:", zones?.supply);
           return (
             <tr key={i}>
               <td style={{ ...S.td, ...S.neg, fontWeight: 600 }}>
