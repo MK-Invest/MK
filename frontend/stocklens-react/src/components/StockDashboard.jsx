@@ -6,6 +6,8 @@
 
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
+import RsiHeatmap from "./RsiHeatmap";
+
 // ─────────────────────────────────────────────────────────
 // FORMATTERS
 // ─────────────────────────────────────────────────────────
@@ -384,37 +386,54 @@ export function StockDashboard({ data }) {
           </table>
         </Section>
 
-        {/* ── TECHNICKÁ ANALÝZA ── */}
-        {tech.rsi != null && (
-          <Section title="Technická analýza">
-            <div style={S.grid2}>
-              <table style={S.table}>
-                <tbody>
-                  <Row label="RSI (14)"        value={tech.rsi?.toFixed(2)} color={tech.rsi < 30 ? "pos" : tech.rsi > 70 ? "neg" : null} />
-                  <Row label="RSI signál"      value={
-                    tech.rsi_signal === "oversold"   ? "🟢 Přeprodáno" :
-                    tech.rsi_signal === "overbought" ? "🔴 Překoupeno" :
-                    "⚪ Neutrální"
-                  } />
-                  <Row label="EMA 20"          value={fmtUSD(tech.ema_20)} />
-                  <Row label="SMA 50"          value={fmtUSD(tech.sma_50)} />
-                  <Row label="SMA 200"         value={fmtUSD(tech.sma_200)} />
-                </tbody>
-              </table>
-              <table style={S.table}>
-                <tbody>
-                  <Row label="Cena nad EMA20"  value={tech.above_ema20  ? "✅ Ano" : "❌ Ne"} color={tech.above_ema20  ? "pos" : "neg"} />
-                  <Row label="Cena nad SMA50"  value={tech.above_sma50  ? "✅ Ano" : "❌ Ne"} color={tech.above_sma50  ? "pos" : "neg"} />
-                  <Row label="Cena nad SMA200" value={tech.above_sma200 ? "✅ Ano" : "❌ Ne"} color={tech.above_sma200 ? "pos" : "neg"} />
-                  <Row label="Celkový trend"   value={
-                    tech.trend === "bullish" ? "🟢 Mírně býčí" :
-                    tech.trend === "bearish" ? "🔴 Medvědí" :
-                    "⚪ Neutrální"
-                  } />
-                  <Row label="Počet svíček"    value={tech.candle_count} />
-                </tbody>
-              </table>
-            </div>
+       {/* ── TECHNICKÁ ANALÝZA ── */}
+{tech.rsi && (
+  <Section title="Technická analýza">
+
+    {/* RSI HEATMAP */}
+    <div style={{ marginBottom: 12 }}>
+      <RsiHeatmap rsi={tech.rsi} />
+    </div>
+
+    <div style={S.grid2}>
+      <table style={S.table}>
+        <tbody>
+          <Row
+            label="RSI signál (D)"
+            value={
+              tech.rsi?.D > 70 ? "🔴 Překoupeno" :
+              tech.rsi?.D < 30 ? "🟢 Přeprodáno" :
+              "⚪ Neutrální"
+            }
+          />
+
+          <Row label="EMA 20" value={fmtUSD(tech.ema_20)} />
+          <Row label="SMA 50" value={fmtUSD(tech.sma_50)} />
+          <Row label="SMA 200" value={fmtUSD(tech.sma_200)} />
+        </tbody>
+      </table>
+
+      <table style={S.table}>
+        <tbody>
+          <Row label="Cena nad EMA20"  value={tech.above_ema20  ? "✅ Ano" : "❌ Ne"} color={tech.above_ema20 ? "pos" : "neg"} />
+          <Row label="Cena nad SMA50"  value={tech.above_sma50  ? "✅ Ano" : "❌ Ne"} color={tech.above_sma50 ? "pos" : "neg"} />
+          <Row label="Cena nad SMA200" value={tech.above_sma200 ? "✅ Ano" : "❌ Ne"} color={tech.above_sma200 ? "pos" : "neg"} />
+
+          <Row
+            label="Celkový trend"
+            value={
+              tech.trend === "bullish" ? "🟢 Mírně býčí" :
+              tech.trend === "bearish" ? "🔴 Medvědí" :
+              "⚪ Neutrální"
+            }
+          />
+
+          <Row label="Počet svíček" value={tech.candle_count} />
+        </tbody>
+      </table>
+    </div>
+  </Section>
+)}
 
             {/* Support zóny */}
             {zones.demand?.length > 0 && (
