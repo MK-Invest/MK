@@ -6,6 +6,8 @@
 
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
+import RsiHeatmap from "./RsiHeatmap";
+
 // ─────────────────────────────────────────────────────────
 // FORMATTERS
 // ─────────────────────────────────────────────────────────
@@ -260,27 +262,7 @@ export function StockDashboard({ data }) {
             </tbody>
           </table>
         </Section>
-{/*
-        {/* ── ODPISY ── */}
-        <Section title="Odpisy (Depreciation & Amortization)">
-          <table style={S.table}>
-            <thead>
-              <tr>
-                <th style={S.th}>Datum</th>
-                <th style={S.th}>Hodnota</th>
-              </tr>
-            </thead>
-            <tbody>
-              {depH.map((r, i) => (
-                <tr key={i}>
-                  <td style={S.tdLabel}>{fmtDate(r.end)}</td>
-                  <td style={S.td}>{fmtB(r.val)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-*/}
+
         {/* ── VALUACE PO KVARTÁLECH ── */}
         <Section title="Valuace po jednotlivých kvartálech">
           <table style={S.table}>
