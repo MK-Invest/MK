@@ -2,7 +2,7 @@
 technical.py — Technická analýza z OHLCV dat
 =============================================
 RSI (D/W/M), MA, EMA
-Demand/Supply zóny
+Demand/Supply zóny (W → D anchor model)
 """
 
 from __future__ import annotations
@@ -23,8 +23,23 @@ def _f(x) -> Optional[float]:
     except Exception:
         return None
 
+
+def _normalize_date(date_str: str) -> Optional[str]:
+    if not date_str:
+        return None
+    try:
+        if " " in date_str:
+            date_str = date_str.split(" ")[0]
+        if "T" in date_str:
+            date_str = date_str.split("T")[0]
+        return date_str
+    except Exception:
+        return None
+
+
 def _parse_ohlcv(raw: list[dict]) -> list[dict]:
     parsed = []
+
     for r in reversed(raw):
         o = _f(r.get("open"))
         h = _f(r.get("high"))
@@ -32,13 +47,9 @@ def _parse_ohlcv(raw: list[dict]) -> list[dict]:
         c = _f(r.get("close"))
         v = _f(r.get("volume"))
 
-        if None not in (o, h, l, c):
-            dt = r.get("datetime", "")
+        dt = _normalize_date(r.get("datetime", ""))
 
-            # 🔥 FIX: sjednocení formátu data
-            if " " in dt:
-                dt = dt.split(" ")[0]
-
+        if None not in (o, h, l, c) and dt:
             parsed.append({
                 "date": dt,
                 "open": o,
@@ -50,16 +61,12 @@ def _parse_ohlcv(raw: list[dict]) -> list[dict]:
 
     return parsed
 
-def _week_key(date_str: str) -> str:
+
+def _week_key(date_str: str) -> Optional[str]:
     try:
-        # normalize datetime string
+        date_str = _normalize_date(date_str)
         if not date_str:
             return None
-
-        if " " in date_str:
-            date_str = date_str.split(" ")[0]
-        if "T" in date_str:
-            date_str = date_str.split("T")[0]
 
         d = _date.fromisoformat(date_str)
         iso = d.isocalendar()
@@ -67,6 +74,7 @@ def _week_key(date_str: str) -> str:
 
     except Exception:
         return None
+
 
 def _is_bearish(c: dict) -> bool:
     return c["close"] < c["open"]
@@ -77,7 +85,7 @@ def _is_bullish(c: dict) -> bool:
 
 
 # =========================================================
-# RESAMPLE WEEKLY
+# WEEKLY RESAMPLE
 # =========================================================
 
 def _resample_weekly(candles: list[dict]) -> list[dict]:
@@ -87,6 +95,8 @@ def _resample_weekly(candles: list[dict]) -> list[dict]:
 
     for c in candles:
         wk = _week_key(c["date"])
+        if not wk:
+            continue
 
         if wk not in weeks:
             weeks[wk] = {
@@ -134,7 +144,7 @@ def compute_rsi(candles: list[dict], period: int = 14) -> Optional[float]:
 
 
 # =========================================================
-# TIMEFRAME RESAMPLE (RSI)
+# RESAMPLE TF
 # =========================================================
 
 def _resample_timeframe(candles: list[dict], mode: str):
@@ -198,189 +208,99 @@ def compute_ema(candles: list[dict], period: int) -> Optional[float]:
 
 
 # =========================================================
-# DEMAND / SUPPLY ZÓNY — nová logika
+# ZONES CORE LOGIC (W → D ANCHOR)
 # =========================================================
 
-def _find_weekly_swing_lows(weekly: list[dict], lookback: int = 3, n: int = 2) -> list[dict]:
-    """
-    Najde posledních n swing lows na týdenních svíčkách.
-    Swing low = týdenní svíčka jejíž low je nejnižší v okně ±lookback
-                a předchozí týden nemá nižší low.
-    Vrátí seřazené od nejnovějšího.
-    """
+def _find_weekly_swing_lows(weekly, lookback=3, n=2):
     swings = []
-    wn = len(weekly)
-
-    for i in range(lookback, wn - lookback):
-        w    = weekly[i]
+    for i in range(lookback, len(weekly) - lookback):
+        w = weekly[i]
         prev = weekly[i - 1]
 
-        window_lows = [weekly[j]["low"] for j in range(i - lookback, i + lookback + 1) if j != i]
+        window = [weekly[j]["low"] for j in range(i - lookback, i + lookback + 1) if j != i]
 
-        if w["low"] < min(window_lows) and prev["low"] >= w["low"]:
-            # Ověř že po tomto swingu přišel pohyb nahoru (impulz)
-            future = weekly[i + 1: i + lookback + 1]
+        if w["low"] < min(window) and prev["low"] >= w["low"]:
+            future = weekly[i + 1:i + lookback + 1]
             if future and max(f["high"] for f in future) > w["high"]:
                 swings.append(w)
 
-    # Vrať posledních n (nejnovější první)
     return list(reversed(swings))[:n]
 
 
-def _find_weekly_swing_highs(weekly: list[dict], lookback: int = 3, n: int = 2) -> list[dict]:
-    """Posledních n swing highs — symetricky k swing lows."""
+def _find_weekly_swing_highs(weekly, lookback=3, n=2):
     swings = []
-    wn = len(weekly)
-
-    for i in range(lookback, wn - lookback):
-        w    = weekly[i]
+    for i in range(lookback, len(weekly) - lookback):
+        w = weekly[i]
         prev = weekly[i - 1]
 
-        window_highs = [weekly[j]["high"] for j in range(i - lookback, i + lookback + 1) if j != i]
+        window = [weekly[j]["high"] for j in range(i - lookback, i + lookback + 1) if j != i]
 
-        if w["high"] > max(window_highs) and prev["high"] <= w["high"]:
-            future = weekly[i + 1: i + lookback + 1]
+        if w["high"] > max(window) and prev["high"] <= w["high"]:
+            future = weekly[i + 1:i + lookback + 1]
             if future and min(f["low"] for f in future) < w["low"]:
                 swings.append(w)
 
     return list(reversed(swings))[:n]
 
 
-def _find_last_bearish_before_impulse(day_candles: list[dict]) -> Optional[dict]:
-    """
-    Z denních svíček swing low týdne najdi:
-    1. První silný bullish den (= impulzní svíčka — body > 1 % a close > open)
-    2. Poslední bearish svíčku PŘED tím bullish dnem
+def compute_zones(weekly, daily, current_price, lookback=3, n_zones=2):
+    daily_by_week = defaultdict(list)
 
-    Vrátí tu poslední bearish svíčku, nebo první svíčku týdne jako fallback.
-    """
-    if not day_candles:
-        return None
-
-    # Najdi první silný bullish den
-    impulse_idx = None
-    for i, c in enumerate(day_candles):
-        body_pct = (c["close"] - c["open"]) / c["open"] if c["open"] else 0
-        if _is_bullish(c) and body_pct > 0.005:   # tělo > 0.5 %
-            impulse_idx = i
-            break
-
-    if impulse_idx is None:
-        # Žádný silný bullish den → vezmi první svíčku jako fallback
-        return day_candles[0]
-
-    if impulse_idx == 0:
-        # Impulz je hned první den → vezmi ji jako zónu
-        return day_candles[0]
-
-    # Hledej poslední bearish svíčku před impulzem
-    for i in range(impulse_idx - 1, -1, -1):
-        if _is_bearish(day_candles[i]):
-            return day_candles[i]
-
-    # Všechny dny před impulzem jsou bullish → vezmi den těsně před impulzem
-    return day_candles[impulse_idx - 1]
-
-
-def _find_last_bullish_before_impulse(day_candles: list[dict]) -> Optional[dict]:
-    """Symetrie pro supply zóny — poslední bullish svíčka před bearish impulzem."""
-    if not day_candles:
-        return None
-
-    impulse_idx = None
-    for i, c in enumerate(day_candles):
-        body_pct = (c["open"] - c["close"]) / c["open"] if c["open"] else 0
-        if _is_bearish(c) and body_pct > 0.005:
-            impulse_idx = i
-            break
-
-    if impulse_idx is None:
-        return day_candles[0]
-    if impulse_idx == 0:
-        return day_candles[0]
-
-    for i in range(impulse_idx - 1, -1, -1):
-        if _is_bullish(day_candles[i]):
-            return day_candles[i]
-
-    return day_candles[impulse_idx - 1]
-
-
-def compute_zones(
-    weekly:        list[dict],
-    daily:         list[dict],
-    current_price: float,
-    lookback:      int = 3,
-    n_zones:       int = 2,
-) -> dict:
-    """
-    Demand zóny:
-      1. Najdi posledních n_zones swing lows na týdenním TF
-      2. Pro každý swing low týden seskup denní svíčky
-      3. Najdi poslední bearish denní svíčku před prvním silným bullish dnem
-      4. zone_low = low té svíčky, zone_high = high té svíčky
-
-    Supply zóny — symetricky.
-    """
-    # Seskup denní svíčky podle týdne
-    daily_by_week: dict = defaultdict(list)
     for c in daily:
-        daily_by_week[_week_key(c["date"])].append(c)
+        wk = _week_key(c["date"])
+        if wk:
+            daily_by_week[wk].append(c)
 
-    # ── Demand zóny ──────────────────────────────────────
-    swing_lows = _find_weekly_swing_lows(weekly, lookback, n_zones)
     demand = []
+    supply = []
 
+    swing_lows = _find_weekly_swing_lows(weekly, lookback, n_zones)
+    swing_highs = _find_weekly_swing_highs(weekly, lookback, n_zones)
+
+    # -------------------------
+    # DEMAND
+    # -------------------------
     for sw in swing_lows:
         wk = sw.get("wk") or _week_key(sw["date"])
-        day_candles = sorted(daily_by_week.get(wk, []), key=lambda c: c["date"])
+        if not wk:
+            continue
 
-        if not day_candles:
-            # Fallback na raw weekly svíčku
-            anchor = sw
-        else:
-            anchor = _find_last_bearish_before_impulse(day_candles)
-            if anchor is None:
-                anchor = day_candles[0]
+        d = daily_by_week.get(wk, [])
+        if not d:
+            continue
 
-        zone_low  = round(anchor["low"],  4)
-        zone_high = round(anchor["high"], 4)
+        anchor = min(d, key=lambda x: x["low"])
 
         demand.append({
-            "zone_low":   zone_low,
-            "zone_high":  zone_high,
-            "zone_mid":   round((zone_low + zone_high) / 2, 4),
-            "week_date":  sw["date"],
+            "zone_low": anchor["low"],
+            "zone_high": anchor["high"],
+            "zone_mid": (anchor["low"] + anchor["high"]) / 2,
+            "week_date": sw["date"],
             "anchor_date": anchor["date"],
         })
 
-    # Filtruj zóny pod aktuální cenou, nejbližší první
     demand = [z for z in demand if z["zone_mid"] < current_price]
     demand.sort(key=lambda z: z["zone_mid"], reverse=True)
 
-    # ── Supply zóny ──────────────────────────────────────
-    swing_highs = _find_weekly_swing_highs(weekly, lookback, n_zones)
-    supply = []
-
+    # -------------------------
+    # SUPPLY
+    # -------------------------
     for sw in swing_highs:
         wk = sw.get("wk") or _week_key(sw["date"])
-        day_candles = sorted(daily_by_week.get(wk, []), key=lambda c: c["date"])
+        if not wk:
+            continue
 
-        if not day_candles:
-            anchor = sw
-        else:
-            anchor = _find_last_bullish_before_impulse(day_candles)
-            if anchor is None:
-                anchor = day_candles[-1]
+        d = daily_by_week.get(wk, [])
+        if not d:
+            continue
 
-        zone_low  = round(anchor["low"],  4)
-        zone_high = round(anchor["high"], 4)
+        anchor = max(d, key=lambda x: x["high"])
 
         supply.append({
-            "zone_low":    zone_low,
-            "zone_high":   zone_high,
-            "zone_mid":    round((zone_low + zone_high) / 2, 4),
-            "week_date":   sw["date"],
+            "zone_low": anchor["low"],
+            "zone_high": anchor["high"],
+            "zone_mid": (anchor["low"] + anchor["high"]) / 2,
+            "week_date": sw["date"],
             "anchor_date": anchor["date"],
         })
 
@@ -388,10 +308,11 @@ def compute_zones(
     supply.sort(key=lambda z: z["zone_mid"])
 
     return {
-        "demand":    demand,
-        "supply":    supply,
+        "demand": demand,
+        "supply": supply,
         "timeframe": "weekly",
     }
+
 
 # =========================================================
 # MAIN
@@ -403,57 +324,18 @@ def compute_technical(raw_ohlcv: list[dict], current_price: float) -> dict:
     if len(candles) < 20:
         return {"error": "Nedostatek dat", "candle_count": len(candles)}
 
-    # ── RSI MULTI TIMEFRAME ──
     rsi_d = compute_rsi(_resample_timeframe(candles, "D"), 14)
     rsi_w = compute_rsi(_resample_timeframe(candles, "W"), 14)
     rsi_m = compute_rsi(_resample_timeframe(candles, "M"), 14)
 
-    rsi_obj = {
-        "D": rsi_d,
-        "W": rsi_w,
-        "M": rsi_m,
-    }
-
-    # ── MA ──
-    sma_50 = compute_sma(candles, 50)
-    sma_200 = compute_sma(candles, 200)
-    ema_20 = compute_ema(candles, 20)
-
-    above_ema20 = current_price > ema_20 if ema_20 else None
-    above_sma50 = current_price > sma_50 if sma_50 else None
-    above_sma200 = current_price > sma_200 if sma_200 else None
-
-    bullish = sum(x is True for x in [above_ema20, above_sma50, above_sma200])
-    bearish = sum(x is False for x in [above_ema20, above_sma50, above_sma200])
-
-    trend = "bullish" if bullish >= 2 else "bearish" if bearish >= 2 else "neutral"
-
     weekly = _resample_weekly(candles)
 
-    result = {
-        "rsi": rsi_obj,
-
-        "sma_50": sma_50,
-        "sma_200": sma_200,
-        "ema_20": ema_20,
-
-        "trend": trend,
-
-        "above_ema20": above_ema20,
-        "above_sma50": above_sma50,
-        "above_sma200": above_sma200,
-
-        "zones": {"demand": [], "supply": [], "timeframe": "weekly"},
-
+    return {
+        "rsi": {"D": rsi_d, "W": rsi_w, "M": rsi_m},
+        "sma_50": compute_sma(candles, 50),
+        "sma_200": compute_sma(candles, 200),
+        "ema_20": compute_ema(candles, 20),
+        "zones": compute_zones(weekly, candles, current_price),
         "candle_count": len(candles),
         "weekly_count": len(weekly),
     }
-
-    if rsi_d is not None:
-        result["rsi_signal"] = (
-            "oversold" if rsi_d < 30 else
-            "overbought" if rsi_d > 70 else
-            "neutral"
-        )
-
-    return result
