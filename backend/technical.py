@@ -23,7 +23,6 @@ def _f(x) -> Optional[float]:
     except Exception:
         return None
 
-
 def _parse_ohlcv(raw: list[dict]) -> list[dict]:
     parsed = []
     for r in reversed(raw):
@@ -34,25 +33,40 @@ def _parse_ohlcv(raw: list[dict]) -> list[dict]:
         v = _f(r.get("volume"))
 
         if None not in (o, h, l, c):
+            dt = r.get("datetime", "")
+
+            # 🔥 FIX: sjednocení formátu data
+            if " " in dt:
+                dt = dt.split(" ")[0]
+
             parsed.append({
-                "date": r.get("datetime", ""),
+                "date": dt,
                 "open": o,
                 "high": h,
                 "low": l,
                 "close": c,
                 "volume": v or 0.0,
             })
-    return parsed
 
+    return parsed
 
 def _week_key(date_str: str) -> str:
     try:
+        # normalize datetime string
+        if not date_str:
+            return None
+
+        if " " in date_str:
+            date_str = date_str.split(" ")[0]
+        if "T" in date_str:
+            date_str = date_str.split("T")[0]
+
         d = _date.fromisoformat(date_str)
         iso = d.isocalendar()
         return f"{iso[0]}-W{iso[1]:02d}"
-    except Exception:
-        return date_str[:7]
 
+    except Exception:
+        return None
 
 def _is_bearish(c: dict) -> bool:
     return c["close"] < c["open"]
