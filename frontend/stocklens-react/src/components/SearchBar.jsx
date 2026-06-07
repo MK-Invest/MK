@@ -1,78 +1,200 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+
+const BASE_URL = "http://localhost:8000";
 
 export default function SearchBar({ onSearch }) {
-  const [value, setValue] = useState("");
+  const [query,   setQuery]   = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [open,    setOpen]    = useState(false);
+  const debounceRef = useRef(null);
+  const wrapRef     = useRef(null);
 
-  const handleSearch = () => {
-    const ticker = value.trim().toUpperCase();
+  console.log("SEARCHBAR MOUNTED");
 
-    if (!ticker) return;
+  // Zavři dropdown při kliknutí mimo
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
+  // Debounce search při psaní
+  const handleChange = (e) => {
+    const val = e.target.value;
+    setQuery(val);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (val.trim().length < 1) {
+      setResults([]);
+      setOpen(false);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res  = await fetch(`${BASE_URL}/search?query=${encodeURIComponent(val.trim())}`);
+        const data = await res.json();
+        setResults(Array.isArray(data) ? data : []);
+        setOpen(true);
+      } catch {
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+  };
+
+  const handleSelect = (item) => {
+    const ticker = item.symbol;
+    setQuery(ticker);
+    setResults([]);
+    setOpen(false);
+    console.log("SEARCH VALUE:", ticker);
     onSearch(ticker);
   };
 
-  return (
-    <div style={styles.wrapper}>
+  const handleSubmit = () => {
+    const val = query.trim().toUpperCase();
+    if (!val) return;
+    console.log("BUTTON CLICKED");
+    console.log("SEARCH VALUE:", val);
+    setOpen(false);
+    onSearch(val);
+  };
 
-      <input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Search ticker..."
-        onKeyDown={(e) =>
-          e.key === "Enter" && handleSearch()
-        }
-        style={styles.input}
-      />
+  const handleKey = (e) => {
+    if (e.key === "Enter") handleSubmit();
+    if (e.key === "Escape") setOpen(false);
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "flex", gap: 8, flex: 1, maxWidth: 480 }}>
+
+      <div style={{ position: "relative", flex: 1 }}>
+        <input
+          value={query}
+          onChange={handleChange}
+          onKeyDown={handleKey}
+          onFocus={() => results.length > 0 && setOpen(true)}
+          placeholder="Ticker nebo název firmy (AAPL, ASML.AS, Apple...)"
+          style={{
+            width: "100%",
+            padding: "8px 12px",
+            background: "#0F172A",
+            border: "1px solid #1E3A5F",
+            borderRadius: 6,
+            color: "#E2E8F0",
+            fontSize: 13,
+            fontFamily: "inherit",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+
+        {/* Dropdown výsledků */}
+        {open && results.length > 0 && (
+          <div style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            background: "#0F172A",
+            border: "1px solid #1E3A5F",
+            borderRadius: 6,
+            zIndex: 1000,
+            maxHeight: 320,
+            overflowY: "auto",
+          }}>
+            {results.map((item, i) => (
+              <div
+                key={i}
+                onClick={() => handleSelect(item)}
+                style={{
+                  padding: "10px 14px",
+                  cursor: "pointer",
+                  borderBottom: i < results.length - 1 ? "1px solid #1E293B" : "none",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = "#1E293B"}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+              >
+                {/* Levá část — ticker + název */}
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#38BDF8", fontFamily: "monospace" }}>
+                    {item.symbol}
+                  </span>
+                  {item.name && item.name !== item.symbol && (
+                    <span style={{ fontSize: 12, color: "#94A3B8", marginLeft: 8 }}>
+                      {item.name}
+                    </span>
+                  )}
+                </div>
+
+                {/* Pravá část — burza + trh */}
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  {item.exchange && (
+                    <span style={{
+                      fontSize: 11,
+                      background: "#1E3A5F",
+                      color: "#7DD3FC",
+                      padding: "2px 6px",
+                      borderRadius: 3,
+                      marginLeft: 4,
+                    }}>
+                      {item.exchange}
+                    </span>
+                  )}
+                  {item.market && (
+                    <span style={{ fontSize: 11, color: "#475569", marginLeft: 6 }}>
+                      {item.market}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <button
-        onClick={handleSearch}
-        style={styles.button}
+        onClick={handleSubmit}
+        style={{
+          padding: "8px 16px",
+          background: "#1E3A5F",
+          border: "1px solid #2563EB",
+          borderRadius: 6,
+          color: "#38BDF8",
+          fontSize: 13,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}
       >
-        Search
+        Hledat
       </button>
 
+      {loading && (
+        <div style={{
+          position: "absolute",
+          right: 80,
+          top: "50%",
+          transform: "translateY(-50%)",
+          fontSize: 11,
+          color: "#475569",
+        }}>
+          ⟳
+        </div>
+      )}
     </div>
   );
 }
-
-const styles = {
-  wrapper: {
-    display: "flex",
-    gap: 14,
-  },
-
-  input: {
-    flex: 1,
-
-    background: "#0b1020",
-
-    border: "1px solid #1e293b",
-
-    borderRadius: 14,
-
-    padding: "16px 18px",
-
-    color: "white",
-
-    fontSize: 15,
-
-    outline: "none",
-  },
-
-  button: {
-    background:
-      "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
-
-    border: "none",
-
-    borderRadius: 14,
-
-    color: "white",
-
-    padding: "0 24px",
-
-    fontWeight: 700,
-
-    cursor: "pointer",
-  },
-};

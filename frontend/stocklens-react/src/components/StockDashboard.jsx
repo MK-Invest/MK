@@ -6,8 +6,6 @@
 
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
-import RsiHeatmap from "./RsiHeatmap";
-
 // ─────────────────────────────────────────────────────────
 // FORMATTERS
 // ─────────────────────────────────────────────────────────
@@ -162,12 +160,15 @@ export function StockDashboard({ data }) {
 
       {/* ── HEADER ── */}
       <div style={S.header}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 20 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 20, flexWrap: "wrap" }}>
           <span style={S.ticker}>{data.ticker}</span>
+          {data.name && data.name !== data.ticker && (
+            <span style={{ fontSize: 16, color: "#94A3B8", fontWeight: 400 }}>{data.name}</span>
+          )}
           <span style={S.price}>{price != null ? `${price.toFixed(2)} USD` : "cena nedostupná"}</span>
         </div>
         <div style={{ fontSize: 12, color: "#475569", letterSpacing: "0.04em" }}>
-          StockLens · SEC EDGAR · {new Date().toLocaleDateString("cs-CZ")}
+          StockLens · {new Date().toLocaleDateString("cs-CZ")}
         </div>
       </div>
 
@@ -257,6 +258,26 @@ export function StockDashboard({ data }) {
                   <td style={{ ...S.td, ...(r.net_income < 0 ? S.neg : {}) }}>{fmtB(r.net_income)}</td>
                   <td style={{ ...S.td, ...(r.op_income < 0 ? S.neg : {}) }}>{fmtB(r.op_income)}</td>
                   <td style={S.td}>{fmtB(r.ebitda)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+
+        {/* ── ODPISY ── */}
+        <Section title="Odpisy (Depreciation & Amortization)">
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Datum</th>
+                <th style={S.th}>Hodnota</th>
+              </tr>
+            </thead>
+            <tbody>
+              {depH.map((r, i) => (
+                <tr key={i}>
+                  <td style={S.tdLabel}>{fmtDate(r.end)}</td>
+                  <td style={S.td}>{fmtB(r.val)}</td>
                 </tr>
               ))}
             </tbody>
@@ -387,108 +408,101 @@ export function StockDashboard({ data }) {
         </Section>
 
         {/* ── TECHNICKÁ ANALÝZA ── */}
-       <Section title="Technická analýza">
+        {tech.rsi != null && (
+          <Section title="Technická analýza">
+            <div style={S.grid2}>
+              <table style={S.table}>
+                <tbody>
+                  <Row label="RSI (14)"        value={tech.rsi?.toFixed(2)} color={tech.rsi < 30 ? "pos" : tech.rsi > 70 ? "neg" : null} />
+                  <Row label="RSI signál"      value={
+                    tech.rsi_signal === "oversold"   ? "🟢 Přeprodáno" :
+                    tech.rsi_signal === "overbought" ? "🔴 Překoupeno" :
+                    "⚪ Neutrální"
+                  } />
+                  <Row label="EMA 20"          value={fmtUSD(tech.ema_20)} />
+                  <Row label="SMA 50"          value={fmtUSD(tech.sma_50)} />
+                  <Row label="SMA 200"         value={fmtUSD(tech.sma_200)} />
+                </tbody>
+              </table>
+              <table style={S.table}>
+                <tbody>
+                  <Row label="Cena nad EMA20"  value={tech.above_ema20  ? "✅ Ano" : "❌ Ne"} color={tech.above_ema20  ? "pos" : "neg"} />
+                  <Row label="Cena nad SMA50"  value={tech.above_sma50  ? "✅ Ano" : "❌ Ne"} color={tech.above_sma50  ? "pos" : "neg"} />
+                  <Row label="Cena nad SMA200" value={tech.above_sma200 ? "✅ Ano" : "❌ Ne"} color={tech.above_sma200 ? "pos" : "neg"} />
+                  <Row label="Celkový trend"   value={
+                    tech.trend === "bullish" ? "🟢 Mírně býčí" :
+                    tech.trend === "bearish" ? "🔴 Medvědí" :
+                    "⚪ Neutrální"
+                  } />
+                  <Row label="Počet svíček"    value={tech.candle_count} />
+                </tbody>
+              </table>
+            </div>
 
-  <RsiHeatmap rsi={tech.rsi} />
+            {/* Support zóny */}
+            {zones.demand?.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 11, color: "#4ADE80", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
+                  ▼ Demand zóny (týdenní swing low → denní anchor svíčka)
+                </div>
+                <table style={S.table}>
+                  <thead>
+                    <tr>
+                      <th style={S.th}>Zóna (low – high)</th>
+                      <th style={S.th}>Střed</th>
+                      <th style={S.th}>Anchor svíčka</th>
+                      <th style={S.th}>Týden swingu</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {zones.demand.map((z, i) => (
+                      <tr key={i}>
+                        <td style={{ ...S.td, ...S.pos, fontWeight: 600 }}>
+                          {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
+                        </td>
+                        <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
+                        <td style={{ ...S.td, color: "#94A3B8" }}>{z.anchor_date ?? "—"}</td>
+                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.week_date ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-  <table style={S.table}>
-    <tbody>
-      <Row
-        label="RSI signál"
-        value={
-          tech.rsi?.D > 70
-            ? "🔴 Overbought"
-            : tech.rsi?.D < 30
-            ? "🟢 Oversold"
-            : "⚪ Neutral"
-        }
-      />
-
-      <Row label="EMA20" value={fmtUSD(tech.ema_20)} />
-      <Row label="SMA50" value={fmtUSD(tech.sma_50)} />
-      <Row label="SMA200" value={fmtUSD(tech.sma_200)} />
-
-      <Row label="Trend" value={tech.trend} />
-      <Row label="Počet svíček" value={tech.candle_count} />
-    </tbody>
-  </table>
-
-{/* SUPPORT ZÓNY */}
-{Array.isArray(zones?.demand) && zones.demand.length > 0 && (
-  <div style={{ marginTop: 16 }}>
-    <div style={{ fontSize: 11, color: "#4ADE80", fontWeight: 600 }}>
-      ▼ Demand zóny
-    </div>
-
-    <table style={S.table}>
-      <tbody>
-        {zones.demand.map((z, i) => {
-          const low = z?.zone_low ?? z?.low;
-          const high = z?.zone_high ?? z?.high;
-
-          if (low == null || high == null) return null;
-console.log("TECH:", tech);
-console.log("ZONES:", zones);
-console.log("DEMAND:", zones?.demand);
-console.log("SUPPLY:", zones?.supply);
-          return (
-            <tr key={i}>
-              <td style={{ ...S.td, ...S.pos, fontWeight: 600 }}>
-                {low.toFixed(2)} – {high.toFixed(2)} USD
-              </td>
-              <td style={S.td}>{z?.zone_mid?.toFixed?.(2) ?? "—"}</td>
-              <td style={{ ...S.td, color: "#94A3B8" }}>
-                {z?.anchor_date ?? "—"}
-              </td>
-              <td style={{ ...S.td, color: "#64748B" }}>
-                {z?.week_date ?? "—"}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  </div>
-)}
-
-{/* RESISTANCE ZÓNY */}
-{Array.isArray(zones?.supply) && zones.supply.length > 0 && (
-  <div style={{ marginTop: 16 }}>
-    <div style={{ fontSize: 11, color: "#F87171", fontWeight: 600 }}>
-      ▲ Supply zóny
-    </div>
-
-    <table style={S.table}>
-      <tbody>
-        {zones.supply.map((z, i) => {
-          const low = z?.zone_low ?? z?.low;
-          const high = z?.zone_high ?? z?.high;
-
-          if (low == null || high == null) return null;
-console.log("TECH:", tech);
-console.log("ZONES:", zones);
-console.log("DEMAND:", zones?.demand);
-console.log("SUPPLY:", zones?.supply);
-          return (
-            <tr key={i}>
-              <td style={{ ...S.td, ...S.neg, fontWeight: 600 }}>
-                {low.toFixed(2)} – {high.toFixed(2)} USD
-              </td>
-              <td style={S.td}>{z?.zone_mid?.toFixed?.(2) ?? "—"}</td>
-              <td style={{ ...S.td, color: "#94A3B8" }}>
-                {z?.anchor_date ?? "—"}
-              </td>
-              <td style={{ ...S.td, color: "#64748B" }}>
-                {z?.week_date ?? "—"}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  </div>
-)}
+            {/* Resistance zóny */}
+            {zones.supply?.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "#F87171", letterSpacing: "0.08em", textTransform: "uppercase", padding: "8px 12px 4px", fontWeight: 600 }}>
+                  ▲ Supply zóny (týdenní swing high → denní anchor svíčka)
+                </div>
+                <table style={S.table}>
+                  <thead>
+                    <tr>
+                      <th style={S.th}>Zóna (low – high)</th>
+                      <th style={S.th}>Střed</th>
+                      <th style={S.th}>Anchor svíčka</th>
+                      <th style={S.th}>Týden swingu</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {zones.supply.map((z, i) => (
+                      <tr key={i}>
+                        <td style={{ ...S.td, ...S.neg, fontWeight: 600 }}>
+                          {z.zone_low?.toFixed(2)} – {z.zone_high?.toFixed(2)} USD
+                        </td>
+                        <td style={S.td}>{z.zone_mid?.toFixed(2)} USD</td>
+                        <td style={{ ...S.td, color: "#94A3B8" }}>{z.anchor_date ?? "—"}</td>
+                        <td style={{ ...S.td, fontSize: 12, color: "#64748B" }}>{z.week_date ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Section>
+        )}
+
       </div>
     </div>
   );
