@@ -6,7 +6,7 @@ import httpx
 from backend.technical import compute_technical
 from backend.metrics import compute_metrics
 from backend.storage import save_snapshot
-from backend.eu import get_eu_fundamentals, is_us_ticker
+from backend.eu import get_eu_fundamentals, is_us_ticker  # yfinance pipeline
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -273,7 +273,7 @@ async def get_stock_data(client, ticker: str) -> dict:
         # ── EU pipeline ──────────────────────────────────
         td, eu_fund = await asyncio.gather(
             twelvedata_ohlcv(client, ticker),
-            get_eu_fundamentals(client, ticker, FMP_API_KEY, safe_get),
+            get_eu_fundamentals(ticker),          # yfinance — bez API klíče
         )
 
         ohlcv = None
@@ -414,26 +414,6 @@ async def company(ticker: str):
         "technical":    d.get("technical"),
     }
 
-@app.get("/debug-eu/{ticker}")
-async def debug_eu(ticker: str):
-    async with httpx.AsyncClient() as client:
-        td = await safe_get(
-            client,
-            "https://api.twelvedata.com/time_series",
-            params={"symbol": ticker, "interval": "1day", "outputsize": 5, "apikey": TD_API_KEY},
-        )
-        income = await safe_get(
-            client,
-            f"{FMP_STABLE}/income-statement",
-            params={"symbol": ticker, "period": "quarter", "limit": 2, "apikey": FMP_API_KEY},
-        )
-    return {
-        "td_status": "ok" if td and "values" in td else "fail",
-        "td_sample": (td.get("values", [{}])[0] if td else td),
-        "td_error": td.get("message") if td else None,
-        "fmp_status": "ok" if income else "fail",
-        "fmp_sample": (income[0] if income else income),
-    }
 
 @app.post("/valuation/{ticker}")
 async def valuation(ticker: str, body: ValuationRequest):
