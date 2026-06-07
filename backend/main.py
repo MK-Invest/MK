@@ -115,17 +115,37 @@ async def twelvedata_ohlcv(client, ticker: str) -> dict | None:
     """
     if not TD_API_KEY:
         return None
+    # Pro EU tickery (obsahují tečku) zkus symbol bez přípony
+    # TwelveData EU formát: symbol=ASML&exchange=XAMS
+    td_symbol = ticker
+    td_params = {
+        "symbol":     td_symbol,
+        "interval":   "1day",
+        "outputsize": 200,
+        "apikey":     TD_API_KEY,
+    }
 
-    data = await safe_get(
-        client,
-        "https://api.twelvedata.com/time_series",
-        params={
-            "symbol":     ticker,
-            "interval":   "1day",
-            "outputsize": 200,
-            "apikey":     TD_API_KEY,
-        },
-    )
+    # Pokud ticker obsahuje tečku → EU → přeformátuj
+    if "." in ticker:
+        base, suffix = ticker.upper().rsplit(".", 1)
+        exchange_map = {
+            "AS":    "XAMS",   # Amsterdam
+            "PA":    "XPAR",   # Paris
+            "DE":    "XETR",   # Frankfurt XETRA
+            "XETRA": "XETR",
+            "L":     "XLON",   # London
+            "SW":    "XSWX",   # Swiss
+            "MI":    "XMIL",   # Milan
+            "MC":    "XMAD",   # Madrid
+            "BR":    "XBRU",   # Brussels
+        }
+        xchange = exchange_map.get(suffix.upper())
+        if xchange:
+            td_params["symbol"]   = base
+            td_params["exchange"] = xchange
+
+    data = await safe_get(client, "https://api.twelvedata.com/time_series", td_params)
+        
     if not data or "values" not in data:
         return None
 
