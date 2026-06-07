@@ -469,6 +469,26 @@ async def valuation(ticker: str, body: ValuationRequest):
         "valuation": result,
     }
 
+@app.get("/debug-eu/{ticker}")
+async def debug_eu(ticker: str):
+    async with httpx.AsyncClient() as client:
+        # Zkus různé formáty
+        base = ticker.upper().rsplit(".", 1)[0] if "." in ticker else ticker
+        
+        r1 = await safe_get(client, "https://api.twelvedata.com/time_series",
+            params={"symbol": ticker, "interval": "1day", "outputsize": 3, "apikey": TD_API_KEY})
+        
+        r2 = await safe_get(client, "https://api.twelvedata.com/time_series",
+            params={"symbol": base, "exchange": "XAMS", "interval": "1day", "outputsize": 3, "apikey": TD_API_KEY})
+        
+        r3 = await safe_get(client, "https://api.twelvedata.com/quote",
+            params={"symbol": ticker, "apikey": TD_API_KEY})
+        
+    return {
+        "format_original": {"status": "ok" if r1 and "values" in r1 else "fail", "error": r1.get("message") if r1 else None},
+        "format_xams":     {"status": "ok" if r2 and "values" in r2 else "fail", "error": r2.get("message") if r2 else None, "sample": r2.get("values", [{}])[:1] if r2 else None},
+        "format_quote":    {"status": "ok" if r3 and r3.get("close") else "fail", "data": r3},
+    }
 
 @app.get("/debug/{ticker}")
 async def debug(ticker: str):
