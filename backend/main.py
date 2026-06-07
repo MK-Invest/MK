@@ -453,6 +453,19 @@ async def valuation(ticker: str, body: ValuationRequest):
 
     return {"ticker": ticker, "price": price, "data": d, "valuation": result}
 
+@app.get("/debug-eu/{ticker}")
+async def debug_eu(ticker: str):
+    from backend.eu import _fetch_yfinance
+    result = _fetch_yfinance(ticker)
+    if not result:
+        return {"error": "yfinance vrátil None"}
+    return {
+        "price":    result.get("price"),
+        "revenue":  result.get("revenue"),
+        "name":     result.get("name"),
+        "ohlcv_count": len(result.get("ohlcv", [])),
+        "history_revenue": result.get("history", {}).get("revenue", [])[:3],
+    }
 
 @app.get("/debug/{ticker}")
 async def debug(ticker: str):
