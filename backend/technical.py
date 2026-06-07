@@ -196,109 +196,157 @@ def compute_zones(
     daily: list[dict],
     current_price: float,
     lookback: int = 3,
-    n_zones: int = 2,
+    n_zones: int = 3,
 ) -> dict:
+    """
+    Institutional Supply/Demand model:
 
-    atr = compute_atr(daily)
+    1. Sweep liquidity (weekly swing)
+    2. Confirm displacement (ATR based)
+    3. Confirm imbalance (FVG style)
+    4. Entry zone = origin candle (last opposite candle before displacement)
+    """
 
-    daily_by_week = defaultdict(list)
-    for c in daily:
-        daily_by_week[_week_key(c["date"])].append(c)
+    # ─────────────────────────────
+    # ATR (simple rolling)
+    # ─────────────────────────────
+    def _atr(candles, period=14):
+        trs = []
+        for i in range(1, len(candles)):
+            h = candles[i]["high"]
+            l = candles[i]["low"]
+            pc = candles[i - 1]["close"]
+            tr = max(h - l, abs(h - pc), abs(l - pc))
+            trs.append(tr)
+        if len(trs) < period:
+            return None
+        return sum(trs[-period:]) / period
 
-    swing_lows = weekly[-n_zones:]
-    swing_highs = weekly[-n_zones:]
+    atr = _atr(daily, 14)
+    if not atr:
+        return {"demand": [], "supply": [], "atr": None, "timeframe": "institutional"}
 
-    fvg = _find_fvg(daily)
+    # ─────────────────────────────
+    # helpers
+    # ─────────────────────────────
+    def is_bull(c): return c["close"] > c["open"]
+    def is_bear(c): return c["close"] < c["open"]
 
+    # ─────────────────────────────
+    # swing detection (weekly)
+    # ─────────────────────────────
+    def swing_lows(w):
+        out = []
+        for i in range(lookback, len(w) - lookback):
+            if w[i]["low"] == min(x["low"] for x in w[i-lookback:i+lookback+1]):
+                out.append(w[i])
+        return out[-n_zones:]
+
+    def swing_highs(w):
+        out = []
+        for i in range(lookback, len(w) - lookback):
+            if w[i]["high"] == max(x["high"] for x in w[i-lookback:i+lookback+1]):
+                out.append(w[i])
+        return out[-n_zones:]
+
+    # ─────────────────────────────
+    # DISPLACEMENT CHECK
+    # ─────────────────────────────
+    def is_displacement(c):
+        body = abs(c["close"] - c["open"])
+        return body > 0.8 * atr   # KEY FIX (realistic)
+
+    # ─────────────────────────────
+    # FIND demand origin
+    # ─────────────────────────────
+    def find_origin(candles, idx):
+        for i in range(idx - 1, -1, -1):
+            if is_bear(candles[i]):
+                return candles[i]
+        return candles[max(0, idx - 1)]
+
+    # ─────────────────────────────
+    # DEMAND
+    # ─────────────────────────────
     demand = []
+
+    for sw in swing_lows(weekly):
+
+        wk = sw.get("wk")
+        days = [c for c in daily if c.get("wk") == wk] if wk else []
+
+        if len(days) < 3:
+            continue
+
+        # find displacement
+        impulse_idx = None
+        for i, c in enumerate(days):
+            if is_bull(c) and is_displacement(c):
+                impulse_idx = i
+                break
+
+        if impulse_idx is None:
+            continue
+
+        origin = find_origin(days, impulse_idx)
+
+        zone = {
+            "zone_low": round(origin["low"], 4),
+            "zone_high": round(origin["high"], 4),
+            "zone_mid": round((origin["low"] + origin["high"]) / 2, 4),
+            "week_date": sw["date"],
+            "type": "demand",
+        }
+
+        # filter below price
+        if zone["zone_mid"] < current_price:
+            demand.append(zone)
+
+    demand = sorted(demand, key=lambda x: x["zone_mid"], reverse=True)[:n_zones]
+
+    # ─────────────────────────────
+    # SUPPLY
+    # ─────────────────────────────
     supply = []
 
-    # =====================================================
-    # DEMAND (bullish institutional zones)
-    # =====================================================
-    for sw in swing_lows:
-        wk = sw.get("wk") or _week_key(sw["date"])
-        candles = sorted(daily_by_week.get(wk, []), key=lambda x: x["date"])
+    for sw in swing_highs(weekly):
 
-        if len(candles) < 3:
+        wk = sw.get("wk")
+        days = [c for c in daily if c.get("wk") == wk] if wk else []
+
+        if len(days) < 3:
             continue
 
-        # find bullish displacement
-        for i, c in enumerate(candles):
-            if _is_displacement(c, atr):
+        impulse_idx = None
+        for i, c in enumerate(days):
+            if is_bear(c) and is_displacement(c):
+                impulse_idx = i
+                break
 
-                ob = _find_order_block(candles, i, "bullish")
-                if not ob:
-                    continue
-
-                # match FVG
-                fvg_zone = next((z for z in fvg if z["type"] == "bullish"), None)
-
-                zone_low = ob["low"]
-                zone_high = ob["high"]
-
-                if fvg_zone:
-                    zone_low = min(zone_low, fvg_zone["low"])
-                    zone_high = max(zone_high, fvg_zone["high"])
-
-                demand.append({
-                    "zone_low": round(zone_low, 4),
-                    "zone_high": round(zone_high, 4),
-                    "zone_mid": round((zone_low + zone_high) / 2, 4),
-                    "week_date": sw["date"],
-                    "anchor_date": ob["date"],
-                    "quality": "institutional"
-                })
-
-    # =====================================================
-    # SUPPLY (bearish institutional zones)
-    # =====================================================
-    for sw in swing_highs:
-        wk = sw.get("wk") or _week_key(sw["date"])
-        candles = sorted(daily_by_week.get(wk, []), key=lambda x: x["date"])
-
-        if len(candles) < 3:
+        if impulse_idx is None:
             continue
 
-        for i, c in enumerate(candles):
-            if _is_displacement(c, atr):
+        origin = find_origin(days, impulse_idx)
 
-                ob = _find_order_block(candles, i, "bearish")
-                if not ob:
-                    continue
+        zone = {
+            "zone_low": round(origin["low"], 4),
+            "zone_high": round(origin["high"], 4),
+            "zone_mid": round((origin["low"] + origin["high"]) / 2, 4),
+            "week_date": sw["date"],
+            "type": "supply",
+        }
 
-                fvg_zone = next((z for z in fvg if z["type"] == "bearish"), None)
+        if zone["zone_mid"] > current_price:
+            supply.append(zone)
 
-                zone_low = ob["low"]
-                zone_high = ob["high"]
-
-                if fvg_zone:
-                    zone_low = min(zone_low, fvg_zone["low"])
-                    zone_high = max(zone_high, fvg_zone["high"])
-
-                supply.append({
-                    "zone_low": round(zone_low, 4),
-                    "zone_high": round(zone_high, 4),
-                    "zone_mid": round((zone_low + zone_high) / 2, 4),
-                    "week_date": sw["date"],
-                    "anchor_date": ob["date"],
-                    "quality": "institutional"
-                })
-
-    demand = [z for z in demand if z["zone_mid"] < current_price]
-    supply = [z for z in supply if z["zone_mid"] > current_price]
-
-    demand.sort(key=lambda x: x["zone_mid"], reverse=True)
-    supply.sort(key=lambda x: x["zone_mid"])
+    supply = sorted(supply, key=lambda x: x["zone_mid"])[:n_zones]
 
     return {
-        "demand": demand[:n_zones],
-        "supply": supply[:n_zones],
-        "timeframe": "institutional",
-        "atr": atr
+        "demand": demand,
+        "supply": supply,
+        "atr": round(atr, 6),
+        "timeframe": "institutional"
     }
-
-
 # =========================================================
 # MAIN
 # =========================================================
