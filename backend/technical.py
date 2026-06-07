@@ -184,12 +184,200 @@ def compute_ema(candles: list[dict], period: int) -> Optional[float]:
 
 
 # =========================================================
-# ZONES (UNCHANGED)
+# DEMAND / SUPPLY ZÓNY — nová logika
 # =========================================================
 
-def compute_zones(*args, **kwargs):
-    return {"demand": [], "supply": [], "timeframe": "weekly"}
+def _find_weekly_swing_lows(weekly: list[dict], lookback: int = 3, n: int = 2) -> list[dict]:
+    """
+    Najde posledních n swing lows na týdenních svíčkách.
+    Swing low = týdenní svíčka jejíž low je nejnižší v okně ±lookback
+                a předchozí týden nemá nižší low.
+    Vrátí seřazené od nejnovějšího.
+    """
+    swings = []
+    wn = len(weekly)
 
+    for i in range(lookback, wn - lookback):
+        w    = weekly[i]
+        prev = weekly[i - 1]
+
+        window_lows = [weekly[j]["low"] for j in range(i - lookback, i + lookback + 1) if j != i]
+
+        if w["low"] < min(window_lows) and prev["low"] >= w["low"]:
+            # Ověř že po tomto swingu přišel pohyb nahoru (impulz)
+            future = weekly[i + 1: i + lookback + 1]
+            if future and max(f["high"] for f in future) > w["high"]:
+                swings.append(w)
+
+    # Vrať posledních n (nejnovější první)
+    return list(reversed(swings))[:n]
+
+
+def _find_weekly_swing_highs(weekly: list[dict], lookback: int = 3, n: int = 2) -> list[dict]:
+    """Posledních n swing highs — symetricky k swing lows."""
+    swings = []
+    wn = len(weekly)
+
+    for i in range(lookback, wn - lookback):
+        w    = weekly[i]
+        prev = weekly[i - 1]
+
+        window_highs = [weekly[j]["high"] for j in range(i - lookback, i + lookback + 1) if j != i]
+
+        if w["high"] > max(window_highs) and prev["high"] <= w["high"]:
+            future = weekly[i + 1: i + lookback + 1]
+            if future and min(f["low"] for f in future) < w["low"]:
+                swings.append(w)
+
+    return list(reversed(swings))[:n]
+
+
+def _find_last_bearish_before_impulse(day_candles: list[dict]) -> Optional[dict]:
+    """
+    Z denních svíček swing low týdne najdi:
+    1. První silný bullish den (= impulzní svíčka — body > 1 % a close > open)
+    2. Poslední bearish svíčku PŘED tím bullish dnem
+
+    Vrátí tu poslední bearish svíčku, nebo první svíčku týdne jako fallback.
+    """
+    if not day_candles:
+        return None
+
+    # Najdi první silný bullish den
+    impulse_idx = None
+    for i, c in enumerate(day_candles):
+        body_pct = (c["close"] - c["open"]) / c["open"] if c["open"] else 0
+        if _is_bullish(c) and body_pct > 0.005:   # tělo > 0.5 %
+            impulse_idx = i
+            break
+
+    if impulse_idx is None:
+        # Žádný silný bullish den → vezmi první svíčku jako fallback
+        return day_candles[0]
+
+    if impulse_idx == 0:
+        # Impulz je hned první den → vezmi ji jako zónu
+        return day_candles[0]
+
+    # Hledej poslední bearish svíčku před impulzem
+    for i in range(impulse_idx - 1, -1, -1):
+        if _is_bearish(day_candles[i]):
+            return day_candles[i]
+
+    # Všechny dny před impulzem jsou bullish → vezmi den těsně před impulzem
+    return day_candles[impulse_idx - 1]
+
+
+def _find_last_bullish_before_impulse(day_candles: list[dict]) -> Optional[dict]:
+    """Symetrie pro supply zóny — poslední bullish svíčka před bearish impulzem."""
+    if not day_candles:
+        return None
+
+    impulse_idx = None
+    for i, c in enumerate(day_candles):
+        body_pct = (c["open"] - c["close"]) / c["open"] if c["open"] else 0
+        if _is_bearish(c) and body_pct > 0.005:
+            impulse_idx = i
+            break
+
+    if impulse_idx is None:
+        return day_candles[0]
+    if impulse_idx == 0:
+        return day_candles[0]
+
+    for i in range(impulse_idx - 1, -1, -1):
+        if _is_bullish(day_candles[i]):
+            return day_candles[i]
+
+    return day_candles[impulse_idx - 1]
+
+
+def compute_zones(
+    weekly:        list[dict],
+    daily:         list[dict],
+    current_price: float,
+    lookback:      int = 3,
+    n_zones:       int = 2,
+) -> dict:
+    """
+    Demand zóny:
+      1. Najdi posledních n_zones swing lows na týdenním TF
+      2. Pro každý swing low týden seskup denní svíčky
+      3. Najdi poslední bearish denní svíčku před prvním silným bullish dnem
+      4. zone_low = low té svíčky, zone_high = high té svíčky
+
+    Supply zóny — symetricky.
+    """
+    # Seskup denní svíčky podle týdne
+    daily_by_week: dict = defaultdict(list)
+    for c in daily:
+        daily_by_week[_week_key(c["date"])].append(c)
+
+    # ── Demand zóny ──────────────────────────────────────
+    swing_lows = _find_weekly_swing_lows(weekly, lookback, n_zones)
+    demand = []
+
+    for sw in swing_lows:
+        wk = sw.get("wk") or _week_key(sw["date"])
+        day_candles = sorted(daily_by_week.get(wk, []), key=lambda c: c["date"])
+
+        if not day_candles:
+            # Fallback na raw weekly svíčku
+            anchor = sw
+        else:
+            anchor = _find_last_bearish_before_impulse(day_candles)
+            if anchor is None:
+                anchor = day_candles[0]
+
+        zone_low  = round(anchor["low"],  4)
+        zone_high = round(anchor["high"], 4)
+
+        demand.append({
+            "zone_low":   zone_low,
+            "zone_high":  zone_high,
+            "zone_mid":   round((zone_low + zone_high) / 2, 4),
+            "week_date":  sw["date"],
+            "anchor_date": anchor["date"],
+        })
+
+    # Filtruj zóny pod aktuální cenou, nejbližší první
+    demand = [z for z in demand if z["zone_mid"] < current_price]
+    demand.sort(key=lambda z: z["zone_mid"], reverse=True)
+
+    # ── Supply zóny ──────────────────────────────────────
+    swing_highs = _find_weekly_swing_highs(weekly, lookback, n_zones)
+    supply = []
+
+    for sw in swing_highs:
+        wk = sw.get("wk") or _week_key(sw["date"])
+        day_candles = sorted(daily_by_week.get(wk, []), key=lambda c: c["date"])
+
+        if not day_candles:
+            anchor = sw
+        else:
+            anchor = _find_last_bullish_before_impulse(day_candles)
+            if anchor is None:
+                anchor = day_candles[-1]
+
+        zone_low  = round(anchor["low"],  4)
+        zone_high = round(anchor["high"], 4)
+
+        supply.append({
+            "zone_low":    zone_low,
+            "zone_high":   zone_high,
+            "zone_mid":    round((zone_low + zone_high) / 2, 4),
+            "week_date":   sw["date"],
+            "anchor_date": anchor["date"],
+        })
+
+    supply = [z for z in supply if z["zone_mid"] > current_price]
+    supply.sort(key=lambda z: z["zone_mid"])
+
+    return {
+        "demand":    demand,
+        "supply":    supply,
+        "timeframe": "weekly",
+    }
 
 # =========================================================
 # MAIN
