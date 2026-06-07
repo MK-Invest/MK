@@ -24,7 +24,10 @@ def get_cik_map():
         data = r.json()
 
         return {
-            item["ticker"].upper(): str(item["cik_str"]).zfill(10)
+            item["ticker"].upper(): {
+                "cik": str(item["cik_str"]).zfill(10),
+                "name": item.get("title", item["ticker"])
+            }
             for item in data.values()
         }
 

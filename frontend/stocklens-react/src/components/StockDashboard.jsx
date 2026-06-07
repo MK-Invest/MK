@@ -1,9 +1,3 @@
-// StockDashboard.jsx
-// Kompletní dashboard – nahraď obsahy CompanyHeader.jsx a MetricsGrid.jsx
-// Importuj a použij místo nich v Overview.jsx:
-//   import { StockDashboard } from "../components/StockDashboard";
-//   <StockDashboard data={data} />
-
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
 import RsiHeatmap from "./RsiHeatmap";

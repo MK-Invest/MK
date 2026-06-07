@@ -201,9 +201,28 @@ _cik_map_cache: dict | None = None
 
 def get_cik(ticker: str) -> str | None:
     global _cik_map_cache
+    
     if _cik_map_cache is None:
         _cik_map_cache = get_cik_map()
-    return _cik_map_cache.get(ticker.upper())
+    item = _cik_map_cache.get(ticker.upper())
+
+    if not item:
+        return None
+    
+    return item["cik"]
+
+def get_company_name(ticker: str) -> str:
+    global _cik_map_cache
+
+    if _cik_map_cache is None:
+        _cik_map_cache = get_cik_map()
+
+    item = _cik_map_cache.get(ticker.upper())
+
+    if not item:
+        return ticker
+
+    return item["name"]
 
 
 async def get_stock_data(client, ticker: str) -> dict:
@@ -410,14 +429,14 @@ async def company(ticker: str):
 
     # Přidej název firmy pokud je dostupný (EU z yfinance)
     if "name" not in fundamentals:
-        fundamentals["name"] = ticker
+        fundamentals["name"] = get_company_name(ticker)
 
     metrics_input = {**fundamentals, "price": d.get("price")}
     metrics = compute_metrics(metrics_input)
 
     return {
         "ticker":       ticker,
-        "name":         fundamentals.get("name", ticker),
+        "name":         fundamentals.get("name"),
         "price":        d.get("price"),
         "fundamentals": fundamentals,
         "metrics":      metrics,
