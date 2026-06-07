@@ -478,7 +478,6 @@ export function StockDashboard({ data }) {
               </div>
             )}
           </Section>
-        )}
 
       </div>
     </div>
