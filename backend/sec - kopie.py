@@ -375,28 +375,16 @@ def extract_time_series(section, concept, n=4):
     # Znovu seřaď po přidání odvozených Q4
     unique_q.sort(key=lambda x: x["end"], reverse=True)
 
-    if len(unique_q) >= 1:
-
-    # nejnovější kvartál
-    newest_year = int(unique_q[0]["end"][:4])
-
-    # zahodit staré série
-    fresh = [
-        q for q in unique_q
-        if int(q["end"][:4]) >= newest_year - 2
-    ]
-
-    # pokud máme 4 kontinuální kvartály -> ideál
-    if len(fresh) >= n:
-        for start_idx in range(len(fresh) - n + 1):
-            window = fresh[start_idx:start_idx+n]
-
+    if len(unique_q) >= n:
+        # Hledej nejnovější okno n po sobě jdoucích kontinuálních kvartálů.
+        # Pokud nejnovějších n není kontinuálních (mezera v sérii),
+        # posuneme se o 1 starší a zkusíme znovu — max 4 pokusy.
+        for start_idx in range(min(4, len(unique_q) - n + 1)):
+            window = unique_q[start_idx: start_idx + n]
             if _quarters_are_continuous(window):
                 return window
-
-    # Varianta C:
-    # vrať prostě nejnovější dostupné kvartály
-    return fresh[:n]
+        # Žádné kontinuální okno → vrať nejnovější n (compute_ttm použije annual fallback)
+        return unique_q[:n]
 
     # Fallback: doplň FY záznamy pokud quarterly nestačí
     # FY záznamy označíme is_annual=True aby compute_ttm věděl že nejde o quarterly
@@ -530,9 +518,6 @@ def compute_ttm(series, annual_series=None):
     Formát prvků: {"end": "YYYY-MM-DD", "val": float}
     """
     if not series:
-        return None
-
-    if len(series) < 4:
         return None
 
     # Strategie 1: máme ≥ 4 quarterly — ověř kontinuitu a že nejde o mix FY+quarterly
