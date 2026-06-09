@@ -293,9 +293,13 @@ def extract_time_series(section, concept, n=4):
                 if end not in frame_ends:
                     # Tento konec nemá frame-záznam → dopočítej z YTD rozdílu
                     q_val = ytd_val - prev_val
+                    
                     if q_val > 0:
                         derived_quarters.append({"end": end, "val": q_val})
                         frame_ends.add(end)
+                        
+                prev_val = ytd_val
+                
             # Dopočítej Q4 z FY − YTD_Q3 pokud chybí
             # Najdi odpovídající FY záznam (end ≈ ytd_sorted[-1].end + 1 kvartál)
             if ytd_sorted and q4 is None:
