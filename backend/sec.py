@@ -381,41 +381,41 @@ def extract_time_series(section, concept, n=4):
 
     if len(unique_q) >= 1:
 
-    # nejnovější kvartál
-    newest_year = int(unique_q[0]["end"][:4])
+        # nejnovější kvartál
+        newest_year = int(unique_q[0]["end"][:4])
 
-    # zahodit staré série
-    fresh = [
-        q for q in unique_q
-        if int(q["end"][:4]) >= newest_year - 2
-    ]
+        # zahodit staré série
+        fresh = [
+            q for q in unique_q
+            if int(q["end"][:4]) >= newest_year - 2
+        ]
 
-    # pokud máme 4 kontinuální kvartály -> ideál
-    if len(fresh) >= n:
-        for start_idx in range(len(fresh) - n + 1):
-            window = fresh[start_idx:start_idx+n]
+        # pokud máme 4 kontinuální kvartály -> ideál
+        if len(fresh) >= n:
+            for start_idx in range(len(fresh) - n + 1):
+                window = fresh[start_idx:start_idx+n]
 
-            if _quarters_are_continuous(window):
-                return window
+                if _quarters_are_continuous(window):
+                    return window
 
-    # Varianta C:
-    # vrať prostě nejnovější dostupné kvartály
-    return fresh[:n]
+        # Varianta C:
+        # vrať prostě nejnovější dostupné kvartály
+        return fresh[:n]
 
     # Fallback: doplň FY záznamy pokud quarterly nestačí
     # FY záznamy označíme is_annual=True aby compute_ttm věděl že nejde o quarterly
-    combined = list(unique_q)
-    annual_seen = set(seen)
-    for fy in true_annual:
-        if fy.get("end") not in annual_seen:
-            annual_seen.add(fy.get("end"))
-            v = safe_float(fy.get("val"))
-            if v is not None:
-                combined.append({"end": fy["end"], "val": v, "is_annual": True})
-        if len(combined) >= n:
-            break
+        combined = list(unique_q)
+        annual_seen = set(seen)
+        for fy in true_annual:
+            if fy.get("end") not in annual_seen:
+                annual_seen.add(fy.get("end"))
+                v = safe_float(fy.get("val"))
+                if v is not None:
+                    combined.append({"end": fy["end"], "val": v, "is_annual": True})
+            if len(combined) >= n:
+                break
 
-    combined.sort(key=lambda x: x["end"], reverse=True)
+        combined.sort(key=lambda x: x["end"], reverse=True)
     return combined[:n]
 
 
