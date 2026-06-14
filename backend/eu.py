@@ -76,7 +76,7 @@ def _fetch_yfinance(ticker: str) -> dict | None:
         )
 
         # ── OHLCV (200 obchodních dní) ────────────────────
-        hist_df = t.history(period="200d")
+        hist_df = t.history(period="5y")
         ohlcv = []
         if hist_df is not None and not hist_df.empty:
             for date, row in hist_df.iloc[::-1].iterrows():  # nejnovější první

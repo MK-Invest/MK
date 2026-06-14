@@ -112,7 +112,7 @@ async def twelvedata_ohlcv(client, ticker: str) -> dict | None:
     data = await safe_get(
         client,
         "https://api.twelvedata.com/time_series",
-        params={"symbol": ticker, "interval": "1day", "outputsize": 200, "apikey": TD_API_KEY},
+        params={"symbol": ticker, "interval": "1day", "outputsize": 1300, "apikey": TD_API_KEY},
     )
     if not data or "values" not in data:
         return None
