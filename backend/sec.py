@@ -331,6 +331,12 @@ def extract_time_series(section, concept, n=4):
             seen.add(q["end"])
             unique_q.append(q)
 
+    if concept == "RevenueFromContractWithCustomerExcludingAssessedTax":
+        print("\n====== RAW QUARTERS ======")
+        print("Newest:", unique_q[0]["end"] if unique_q else None)
+        for q in unique_q[:8]:
+            print(q["end"], q["val"])
+        
     # ── Globální Q4 derivace ──────────────────────────────
     # Pro každý FY annual záznam zkontroluj jestli chybí Q4 (= záznam jehož end
     # je blízký FY end). Pokud máme Q1+Q2+Q3 daného FY, dopočítej Q4.
