@@ -110,7 +110,7 @@ def model_dcf(
     price         = _safe(equity_value / shares) if shares else None
 
     # Confidence: závisí na znaménku FCF a rozumnosti WACC
-    base_conf = 0.80 if fcf > 0 else 0.35
+    base_conf = 0.75 if fcf > 0 else 0.35
 
     return {
         "model":        "dcf",
@@ -352,20 +352,15 @@ def run_scenarios(input_data: dict, wacc: float = 0.10, years: int = 5) -> dict:
         # ── Model 2: DCF ─────────────────────────────────
         if fcf is not None:
             adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
-            models_out["dcf"] = None
-
-            if fcf is not None and fcf > 0:
-                adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
-
-                models_out["dcf"] = model_dcf(
-                    fcf=fcf,
-                    net_debt=net_debt,
-                    shares=shares,
-                    wacc=adj_wacc,
-                    fcf_growth=sp["fcf_growth"],
-                    terminal_growth=0.025,
-                    years=years,
-                )
+            models_out["dcf"] = model_dcf(
+                fcf            = fcf,
+                net_debt       = net_debt,
+                shares         = shares,
+                wacc           = adj_wacc,
+                fcf_growth     = sp["fcf_growth"],
+                terminal_growth= 0.025,
+                years          = years,
+            )
 
         # ── Model 3: FCF Yield ────────────────────────────
         if fcf is not None:
@@ -382,31 +377,18 @@ def run_scenarios(input_data: dict, wacc: float = 0.10, years: int = 5) -> dict:
         if nopat is not None and roic is not None and roic > 0:
             adj_roic_growth = revenue_growth + sp["roic_growth_adj"]
             adj_wacc        = max(wacc + sp["wacc_adj"], 0.04)
-            models_out["roic_ep"] = None
-                if (
-                    nopat is not None
-                    and roic is not None
-                    and roic > 0
-                    and nopat != 0
-                ):
-                    adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
-                    adj_growth = max(revenue_growth + sp["roic_growth_adj"], 0.0)
-
-                    models_out["roic_ep"] = model_roic_ep(
-                        nopat=nopat,
-                        roic=roic,
-                        net_debt=net_debt,
-                        shares=shares,
-                        wacc=adj_wacc,
-                        growth=adj_growth,
-                        years=years,
-                    )
+            models_out["roic_ep"] = model_roic_ep(
+                nopat    = nopat,
+                roic     = roic,
+                net_debt = net_debt,
+                shares   = shares,
+                wacc     = adj_wacc,
+                growth   = max(adj_roic_growth, 0.0),
+                years    = years,
+            )
 
         # ── Composite ─────────────────────────────────────
-        comp = composite_price([
-            m for m in models_out.values()
-            if m is not None
-        ])
+        comp = composite_price(list(models_out.values()))
 
         result[scenario] = {
             "label":     sp["label"],

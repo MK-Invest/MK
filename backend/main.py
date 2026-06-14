@@ -341,12 +341,18 @@ class ScenarioParams(BaseModel):
     revenue_cagr:       float
     ebitda_margin:      float
     ev_ebitda_multiple: float
+    revenue_cagr: float
+    fcf_margin: float
+    exit_multiple: float
 
 
 class ValuationRequest(BaseModel):
     required_return: float = 0.12
-    years: int = 2
+    years: int = 3
     base: ScenarioParams | None = None
+    bull: Scenario
+    base: Scenario
+    bear: Scenario
 
 
 # =========================================================
@@ -467,6 +473,15 @@ async def valuation(ticker: str, body: ValuationRequest):
         "ev_ebitda_multiple": base_override.get("ev_ebitda_multiple") or 15.0,
         "net_debt":           d.get("net_debt") or 0,
         "shares":             shares,
+        # 🔥 DŮLEŽITÉ PRO NOVÉ MODELY
+        "fcf": d.get("fcf"),
+        "nopat": d.get("nopat"),
+        "roic": d.get("roic"),
+
+        # volitelné (ale dobré mít)
+        "revenue_growth": d.get("revenue_growth") or 0.05,
+        "tax_rate": d.get("tax_rate"),
+        "fcf_margin": d.get("fcf") / d.get("revenue") if d.get("revenue") else None
     }
     result = run_scenarios(input_data)
 
