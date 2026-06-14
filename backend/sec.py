@@ -399,7 +399,20 @@ def extract_time_series(section, concept, n=4):
                     return window
 
         # Varianta C:
-        # vrať prostě nejnovější dostupné kvartály
+        # Varianta C:
+        # pokud nejsou 4 kontinuální kvartály,
+        # vrať nejnovější dostupná data, ne starou sérii
+
+        fresh.sort(key=lambda x: x["end"], reverse=True)
+
+        if fresh:
+            newest_year = int(fresh[0]["end"][:4])
+
+            fresh = [
+                q for q in fresh
+                if int(q["end"][:4]) >= newest_year - 1
+            ]
+
         return fresh[:n]
 
     # Fallback: doplň FY záznamy pokud quarterly nestačí
