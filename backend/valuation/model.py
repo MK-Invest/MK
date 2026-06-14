@@ -316,10 +316,19 @@ def run_scenarios(
     ebitda_margin = float(input_data.get("ebitda_margin") or 0.20)
     ev_ebitda_multiple = float(input_data.get("ev_ebitda_multiple") or 15.0)
     net_debt = float(input_data.get("net_debt") or 0)
-    shares = float(input_data.get("shares") or 1)
+    shares_raw = input_data.get("shares")
+    if not shares_raw:
+        return {"error": "missing shares - cannot value company"}
+    
+    shares = float(shares_raw)
     revenue_growth = float(input_data.get("revenue_growth") or 0.05)
 
     fcf = _safe(input_data.get("fcf"))
+
+    if fcf is None and revenue > 0:
+        # fallback estimate (TEMP fix)
+        fcf = revenue * 0.12   # MSFT-like default margin proxy
+    
     nopat = _safe(input_data.get("nopat"))
     roic = _safe(input_data.get("roic"))
     scenario_overrides = scenario_overrides or {}
@@ -383,7 +392,8 @@ def run_scenarios(
                 years=years,
             )
 
-        comp = composite_price([m for m in models_out.values() if m is not None])
+        valid_models = [m for m in models_out.values() if m and m.get("price") is not None]
+        comp = composite_price(valid_models)
         ev_model = models_out["ev_ebitda"]
         projected_revenue = revenue * ((1 + adj_growth) ** years)
 
