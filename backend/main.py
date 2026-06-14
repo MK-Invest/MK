@@ -186,7 +186,7 @@ def merge(*sources) -> dict:
         base_score = PRIORITY.get(src, 0) + conf
 
         for k, v in s.items():
-            if k in ("source", "confidence") or v is None:
+            if k in ("source", "confidence"):
                 continue
 
             # SPECiÁLNÍ FIX: historie nikdy nepřepisuj
@@ -442,7 +442,18 @@ async def company(ticker: str):
             if k not in ("ticker", "technical", "_history", "ohlcv")
         }
 
-        history = d.get("_history") or d.get("history") or {}
+        history = (
+            d.get("_history")
+            or d.get("history")
+            or {}
+        )
+
+        # HARD FIX: normalizace struktury
+        history.setdefault("revenue", [])
+        history.setdefault("net_income", [])
+        history.setdefault("operating_income", [])
+        history.setdefault("depreciation", [])
+
         fundamentals["history"] = history
 
         if "name" not in fundamentals:
