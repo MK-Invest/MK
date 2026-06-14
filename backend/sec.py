@@ -272,10 +272,18 @@ def extract_net_debt(gaap):
 def extract_eps_quarterly(gaap):
     ni = pick_first_existing(gaap, ["NetIncomeLoss"])
     shares = pick_latest_scalar(gaap, ["CommonStockSharesOutstanding"])
-    if not ni or not shares:
-        return []
-    return [{"end": q["end"], "eps": q["val"] / shares} for q in ni[:4] if q.get("val")]
 
+    if not ni:
+        return []
+
+    if not shares or shares == 0:
+        return []   # nebo fallback na NI bez EPS
+
+    return [
+        {"end": q["end"], "eps": q["val"] / shares}
+        for q in ni[:4]
+        if q.get("val")
+    ]
 
 # =========================================================
 # MAIN
@@ -285,21 +293,30 @@ def extract_fundamentals(data):
     facts = data.get("facts", {})
     gaap = facts.get("us-gaap", {})
 
-    result = {}
-
     revenue = pick_first_existing(gaap, ["Revenues"])
     net_income = pick_first_existing(gaap, ["NetIncomeLoss"])
+    op_income = pick_first_existing(gaap, ["OperatingIncomeLoss"])
+    depreciation = pick_first_existing(gaap, [
+        "DepreciationAndAmortization",
+        "Depreciation",
+        "DepreciationDepletionAndAmortization"
+    ])
 
-    revenue_ttm = compute_ttm(revenue)
-    ni_ttm = compute_ttm(net_income)
+    result = {}
 
-    if revenue_ttm:
-        result["revenue"] = revenue_ttm
-    if ni_ttm:
-        result["net_income"] = ni_ttm
+    result["revenue"] = compute_ttm(revenue)
+    result["net_income"] = compute_ttm(net_income)
 
     result["fcf"] = extract_fcf(gaap)
     result["net_debt"] = extract_net_debt(gaap)
     result["eps_quarterly"] = extract_eps_quarterly(gaap)
+
+    # 🔥 DŮLEŽITÉ — DOPLŇ HISTORY
+    result["history"] = {
+        "revenue": revenue,
+        "net_income": net_income,
+        "operating_income": op_income,
+        "depreciation": depreciation
+    }
 
     return result
