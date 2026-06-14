@@ -480,7 +480,7 @@ async def company(ticker: str):
             "history": fundamentals["history"],
             "revenue": fundamentals.get("revenue"),
             "net_income": fundamentals.get("net_income"),
-            "ebitda": fundamentals.get("ebitda"),
+            "ebitda": metrics["ttm"]["ebitda"],
         }
 
         metrics = compute_metrics(metrics_input)
