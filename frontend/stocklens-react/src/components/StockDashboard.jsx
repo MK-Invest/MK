@@ -105,6 +105,75 @@ function QChart({ data, dataKey, label, color = "#38BDF8" }) {
 // TREND SIGNAL ROW
 // ─────────────────────────────────────────────────────────
 
+
+function ValuationModelsTable({ scenarios, price }) {
+  if (!scenarios?.base) {
+    return <div style={{ color: "#475569", padding: 12, fontSize: 12 }}>Valuation models not loaded</div>;
+  }
+
+  const modelRows = [
+    { key: "composite", label: "Composite" },
+    { key: "ev_ebitda", label: "EV/EBITDA" },
+    { key: "dcf", label: "DCF" },
+    { key: "fcf_yield", label: "FCF Yield" },
+    { key: "roic_ep", label: "ROIC / EP" },
+  ];
+  const scenarioKeys = ["bear", "base", "bull"];
+
+  const modelPrice = (scenario, key) => {
+    const sc = scenarios?.[scenario];
+    if (!sc) return null;
+    if (key === "composite") return sc.composite?.price ?? sc.price ?? null;
+    return sc.models?.[key]?.price ?? null;
+  };
+
+  const modelConfidence = (scenario, key) => {
+    const sc = scenarios?.[scenario];
+    if (!sc) return null;
+    if (key === "composite") return sc.composite?.confidence ?? null;
+    return sc.models?.[key]?.confidence ?? null;
+  };
+
+  const cellStyle = (value) => ({
+    ...S.td,
+    ...(value != null && price ? (value >= price ? S.pos : S.neg) : {}),
+  });
+
+  return (
+    <>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>Model</th>
+            <th style={S.th}>Bear</th>
+            <th style={S.th}>Base</th>
+            <th style={S.th}>Bull</th>
+            <th style={S.th}>Base confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {modelRows.map(row => {
+            const baseVal = modelPrice("base", row.key);
+            return (
+              <tr key={row.key}>
+                <td style={S.tdLabel}>{row.label}</td>
+                {scenarioKeys.map(key => {
+                  const value = modelPrice(key, row.key);
+                  return <td key={key} style={cellStyle(value)}>{fmtUSD(value)}</td>;
+                })}
+                <td style={S.td}>{fmtPct(modelConfidence("base", row.key))}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11, color: "#64748B", padding: "8px 12px" }}>
+        Hodnoty jsou price targety na akcii. Zelena znamena nad aktualni cenou, cervena pod aktualni cenou.
+      </div>
+    </>
+  );
+}
+
 function TrendRow({ label, value, note }) {
   const ok = value === true;
   const bad = value === false;
@@ -133,6 +202,8 @@ export function StockDashboard({ data }) {
   const tech = data.technical ?? {};
   const zones = tech.zones ?? {};
   const price = data.price;
+  const scenarios = data.scenarios ?? {};
+  const valuationHistorical = data.valuationHistorical ?? {};
 
   // History pro kvartální tabulku (z fundamentals.history)
   const h = f.history ?? {};
@@ -226,7 +297,29 @@ export function StockDashboard({ data }) {
         </Section>
 
         {/* ── KVARTÁLNÍ GRAFY ── */}
-        <Section title="Vývoj kvartálních výsledků — grafy">
+                <Section title="Valuation models">
+          <div style={S.grid2}>
+            <table style={S.table}>
+              <tbody>
+                <Row label="Rating" value={data.valuationRating ?? "-"} color={data.valuationRatingColor === "green" ? "pos" : data.valuationRatingColor === "red" ? "neg" : "warn"} />
+                <Row label="Required return" value={fmtPct(data.valuationRequiredReturn)} />
+                <Row label="Horizon" value={data.valuationYears ? `${data.valuationYears} roky` : "-"} />
+                <Row label="Hist. revenue CAGR" value={fmtPct(valuationHistorical.hist_cagr)} />
+              </tbody>
+            </table>
+            <table style={S.table}>
+              <tbody>
+                <Row label="Base intrinsic value" value={fmtUSD(scenarios.base?.intrinsic_value)} color={scenarios.base?.upside >= 0 ? "pos" : "neg"} />
+                <Row label="Base upside" value={fmtPct(scenarios.base?.upside)} color={scenarios.base?.upside >= 0 ? "pos" : "neg"} />
+                <Row label="Base revenue CAGR" value={fmtPct(scenarios.base?.revenue_cagr)} />
+                <Row label="Base EBITDA margin" value={fmtPct(scenarios.base?.ebitda_margin)} />
+              </tbody>
+            </table>
+          </div>
+          <ValuationModelsTable scenarios={scenarios} price={price} />
+        </Section>
+
+<Section title="Vývoj kvartálních výsledků — grafy">
           <div style={S.grid3}>
             <QChart data={histRows} dataKey="revenue"   label="Tržby"       color="#38BDF8" />
             <QChart data={histRows} dataKey="net_income" label="Čistý zisk"  color="#4ADE80" />

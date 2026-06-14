@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { getCompany } from "../api";
+import { getCompany, getValuation } from "../api";
 import SearchBar from "../components/SearchBar";
 import { StockDashboard } from "../components/StockDashboard";
 
@@ -12,12 +12,25 @@ export default function Overview() {
     setLoading(true);
     setError(null);
     try {
-      const res = await getCompany(ticker);
-      if (res?.detail) {
+      const [company, valuation] = await Promise.all([
+        getCompany(ticker),
+        getValuation(ticker),
+      ]);
+
+      if (company?.detail) {
         setError(`Ticker nenalezen: ${ticker}`);
         setData(null);
       } else {
-        setData(res);
+        setData({
+          ...company,
+          valuation: valuation?.valuation,
+          scenarios: valuation?.scenarios,
+          valuationHistorical: valuation?.historical,
+          valuationRating: valuation?.rating,
+          valuationRatingColor: valuation?.rating_color,
+          valuationRequiredReturn: valuation?.required_return,
+          valuationYears: valuation?.years,
+        });
       }
     } catch (e) {
       setError("Chyba při načítání dat.");

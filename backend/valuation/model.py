@@ -295,128 +295,109 @@ SCENARIO_PARAMS = {
 # RUN SCENARIOS  (hlavní entry point)
 # =========================================================
 
-def run_scenarios(input_data: dict, wacc: float = 0.10, years: int = 5) -> dict:
+def run_scenarios(
+    input_data: dict,
+    wacc: float = 0.10,
+    years: int = 5,
+    scenario_overrides: dict | None = None,
+) -> dict:
     """
-    Spustí bear / base / bull přes všechny dostupné modely.
+    Runs bear/base/bull valuation scenarios across available models.
 
-    Povinné vstupy:
-      revenue, ebitda_margin, ev_ebitda_multiple, net_debt, shares
-
-    Volitelné (odemykají další modely):
-      fcf        → DCF + FCF Yield
-      nopat      → ROIC/EP (spolu s roic)
-      roic       → ROIC/EP
-      tax_rate   → informativně
-      revenue_growth → base forward growth pro EV/EBITDA
-
-    Výstup pro každý scénář:
-      {
-        label, models: { ev_ebitda, dcf, fcf_yield, roic_ep },
-        composite: { price, confidence, models_used, weights }
-      }
+    `scenario_overrides` may contain per-scenario values from the UI:
+      revenue_cagr, ebitda_margin, ev_ebitda_multiple, fcf_margin
     """
-
-    # ── Základní vstupy ──────────────────────────────────
-    revenue            = float(input_data.get("revenue") or 0)
-    ebitda_margin      = float(input_data.get("ebitda_margin") or 0.20)
+    revenue = float(input_data.get("revenue") or 0)
+    ebitda_margin = float(input_data.get("ebitda_margin") or 0.20)
     ev_ebitda_multiple = float(input_data.get("ev_ebitda_multiple") or 15.0)
-    net_debt           = float(input_data.get("net_debt") or 0)
-    shares             = float(input_data.get("shares") or 1)
-    revenue_growth     = float(input_data.get("revenue_growth") or 0.05)
+    net_debt = float(input_data.get("net_debt") or 0)
+    shares = float(input_data.get("shares") or 1)
+    revenue_growth = float(input_data.get("revenue_growth") or 0.05)
 
-    # ── Pokročilé vstupy (optional) ──────────────────────
-    fcf      = _safe(input_data.get("fcf"))
-    nopat    = _safe(input_data.get("nopat"))
-    roic     = _safe(input_data.get("roic"))
+    fcf = _safe(input_data.get("fcf"))
+    nopat = _safe(input_data.get("nopat"))
+    roic = _safe(input_data.get("roic"))
+    scenario_overrides = scenario_overrides or {}
 
     result = {}
 
     for scenario, sp in SCENARIO_PARAMS.items():
+        override = scenario_overrides.get(scenario) or {}
         models_out = {}
 
-        # ── Model 1: EV/EBITDA ───────────────────────────
-        adj_growth   = revenue_growth + sp["revenue_growth_adj"]
-        adj_margin   = max(ebitda_margin + sp["ebitda_margin_adj"], 0.01)
-        adj_multiple = max(ev_ebitda_multiple * (1 + sp["ev_ebitda_adj"]), 1.0)
+        adj_growth = float(override.get("revenue_cagr", revenue_growth + sp["revenue_growth_adj"]))
+        adj_margin = float(override.get("ebitda_margin", ebitda_margin + sp["ebitda_margin_adj"]))
+        adj_margin = max(adj_margin, 0.01)
+        adj_multiple = float(override.get("ev_ebitda_multiple", ev_ebitda_multiple * (1 + sp["ev_ebitda_adj"])))
+        adj_multiple = max(adj_multiple, 1.0)
+
+        scenario_fcf = fcf
+        fcf_margin = _safe(override.get("fcf_margin"))
+        if fcf_margin is not None and revenue > 0:
+            scenario_fcf = revenue * ((1 + adj_growth) ** years) * fcf_margin
 
         models_out["ev_ebitda"] = model_ev_ebitda(
-            revenue            = revenue,
-            ebitda_margin      = adj_margin,
-            ev_ebitda_multiple = adj_multiple,
-            net_debt           = net_debt,
-            shares             = shares,
-            revenue_growth     = adj_growth,
-            years              = years,
+            revenue=revenue,
+            ebitda_margin=adj_margin,
+            ev_ebitda_multiple=adj_multiple,
+            net_debt=net_debt,
+            shares=shares,
+            revenue_growth=adj_growth,
+            years=years,
         )
 
-        # ── Model 2: DCF ─────────────────────────────────
-        if fcf is not None:
+        if scenario_fcf is not None and scenario_fcf > 0:
             adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
-            models_out["dcf"] = None
-
-            if fcf is not None and fcf > 0:
-                adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
-
-                models_out["dcf"] = model_dcf(
-                    fcf=fcf,
-                    net_debt=net_debt,
-                    shares=shares,
-                    wacc=adj_wacc,
-                    fcf_growth=sp["fcf_growth"],
-                    terminal_growth=0.025,
-                    years=years,
-                )
-
-        # ── Model 3: FCF Yield ────────────────────────────
-        if fcf is not None:
-            base_yield = 0.04
-            adj_yield  = max(base_yield + sp["target_yield_adj"], 0.01)
+            models_out["dcf"] = model_dcf(
+                fcf=scenario_fcf,
+                net_debt=net_debt,
+                shares=shares,
+                wacc=adj_wacc,
+                fcf_growth=sp["fcf_growth"],
+                terminal_growth=0.025,
+                years=years,
+            )
+            adj_yield = max(0.04 + sp["target_yield_adj"], 0.01)
             models_out["fcf_yield"] = model_fcf_yield(
-                fcf          = fcf,
-                net_debt     = net_debt,
-                shares       = shares,
-                target_yield = adj_yield,
+                fcf=scenario_fcf,
+                net_debt=net_debt,
+                shares=shares,
+                target_yield=adj_yield,
             )
 
-        # ── Model 4: ROIC / EP ────────────────────────────
-        if nopat is not None and roic is not None and roic > 0:
-            adj_roic_growth = revenue_growth + sp["roic_growth_adj"]
-            adj_wacc        = max(wacc + sp["wacc_adj"], 0.04)
-            models_out["roic_ep"] = None
-                if (
-                    nopat is not None
-                    and roic is not None
-                    and roic > 0
-                    and nopat != 0
-                ):
-                    adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
-                    adj_growth = max(revenue_growth + sp["roic_growth_adj"], 0.0)
+        if nopat is not None and roic is not None and roic > 0 and nopat != 0:
+            adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
+            roic_growth = max(adj_growth + sp["roic_growth_adj"], 0.0)
+            models_out["roic_ep"] = model_roic_ep(
+                nopat=nopat,
+                roic=roic,
+                net_debt=net_debt,
+                shares=shares,
+                wacc=adj_wacc,
+                growth=roic_growth,
+                years=years,
+            )
 
-                    models_out["roic_ep"] = model_roic_ep(
-                        nopat=nopat,
-                        roic=roic,
-                        net_debt=net_debt,
-                        shares=shares,
-                        wacc=adj_wacc,
-                        growth=adj_growth,
-                        years=years,
-                    )
-
-        # ── Composite ─────────────────────────────────────
-        comp = composite_price([
-            m for m in models_out.values()
-            if m is not None
-        ])
+        comp = composite_price([m for m in models_out.values() if m is not None])
+        ev_model = models_out["ev_ebitda"]
+        projected_revenue = revenue * ((1 + adj_growth) ** years)
 
         result[scenario] = {
-            "label":     sp["label"],
-            "models":    models_out,
+            "label": sp["label"],
+            "revenue_cagr": adj_growth,
+            "ebitda_margin": adj_margin,
+            "ev_ebitda_multiple": adj_multiple,
+            "projected_revenue": projected_revenue,
+            "projected_ebitda": ev_model.get("ebitda"),
+            "exit_ev": ev_model.get("ev"),
+            "exit_price_per_share": ev_model.get("price"),
+            "models": models_out,
             "composite": comp,
-            # Zpětná kompatibilita — "price" na top level
-            "price":     comp["price"],
-            "ebitda":    models_out["ev_ebitda"].get("ebitda"),
-            "ev":        models_out["ev_ebitda"].get("ev"),
-            "equity":    models_out["ev_ebitda"].get("equity"),
+            "price": comp["price"],
+            "ebitda": ev_model.get("ebitda"),
+            "ev": ev_model.get("ev"),
+            "equity": ev_model.get("equity"),
         }
 
     return result
+

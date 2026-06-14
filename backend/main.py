@@ -338,21 +338,19 @@ async def td_symbol_search(query: str) -> list[dict]:
 # =========================================================
 
 class ScenarioParams(BaseModel):
-    revenue_cagr:       float
-    ebitda_margin:      float
-    ev_ebitda_multiple: float
-    revenue_cagr: float
-    fcf_margin: float
-    exit_multiple: float
+    revenue_cagr: float | None = None
+    ebitda_margin: float | None = None
+    ev_ebitda_multiple: float | None = None
+    fcf_margin: float | None = None
+    exit_multiple: float | None = None
 
 
 class ValuationRequest(BaseModel):
     required_return: float = 0.12
     years: int = 3
+    bear: ScenarioParams | None = None
     base: ScenarioParams | None = None
-    bull: Scenario
-    base: Scenario
-    bear: Scenario
+    bull: ScenarioParams | None = None
 
 
 # =========================================================
@@ -458,34 +456,105 @@ async def valuation(ticker: str, body: ValuationRequest):
 
     shares = d.get("shares")
     if not shares or shares == 0:
-        raise HTTPException(status_code=422, detail=f"Chybí data o počtu akcií pro {ticker}")
+        raise HTTPException(status_code=422, detail=f"Chybi data o poctu akcii pro {ticker}")
 
     price = d.get("price")
     if not price:
-        raise HTTPException(status_code=422, detail=f"Cena nedostupná pro {ticker}")
+        raise HTTPException(status_code=422, detail=f"Cena nedostupna pro {ticker}")
 
-    base_override = body.base.model_dump() if body.base else {}
-    sec_margin    = d.get("ebitda_margin")
+    base_override = body.base.model_dump(exclude_none=True) if body.base else {}
+    sec_margin = d.get("ebitda_margin")
+    revenue = d.get("revenue") or 0
+    net_debt = d.get("net_debt") or 0
 
     input_data = {
-        "revenue":            d.get("revenue") or 0,
-        "ebitda_margin":      base_override.get("ebitda_margin") or sec_margin or 0.20,
+        "revenue": revenue,
+        "ebitda_margin": base_override.get("ebitda_margin") or sec_margin or 0.20,
         "ev_ebitda_multiple": base_override.get("ev_ebitda_multiple") or 15.0,
-        "net_debt":           d.get("net_debt") or 0,
-        "shares":             shares,
-        # 🔥 DŮLEŽITÉ PRO NOVÉ MODELY
+        "net_debt": net_debt,
+        "shares": shares,
         "fcf": d.get("fcf"),
         "nopat": d.get("nopat"),
         "roic": d.get("roic"),
-
-        # volitelné (ale dobré mít)
-        "revenue_growth": d.get("revenue_growth") or 0.05,
+        "revenue_growth": base_override.get("revenue_cagr") or d.get("revenue_growth") or 0.05,
         "tax_rate": d.get("tax_rate"),
-        "fcf_margin": d.get("fcf") / d.get("revenue") if d.get("revenue") else None
+        "fcf_margin": d.get("fcf") / revenue if revenue else None,
     }
-    result = run_scenarios(input_data)
 
-    return {"ticker": ticker, "price": price, "data": d, "valuation": result}
+    overrides = {
+        name: sc.model_dump(exclude_none=True)
+        for name, sc in {"bear": body.bear, "base": body.base, "bull": body.bull}.items()
+        if sc is not None
+    }
+
+    raw = run_scenarios(
+        input_data,
+        wacc=body.required_return,
+        years=body.years,
+        scenario_overrides=overrides,
+    )
+
+    scenarios = {}
+    for name, sc in raw.items():
+        intrinsic = sc.get("price")
+        upside = (intrinsic / price - 1) if intrinsic is not None and price else None
+        required_cagr = ((sc.get("exit_price_per_share") or 0) / price) ** (1 / body.years) - 1 if price and body.years else None
+        scenarios[name] = {
+            **sc,
+            "intrinsic_value": intrinsic,
+            "upside": upside,
+            "required_cagr": required_cagr,
+        }
+
+    metrics = compute_metrics({**d, "history": d.get("_history") or d.get("history") or {}})
+    ttm = metrics.get("ttm", {}) if metrics else {}
+    hist = d.get("_history") or d.get("history") or {}
+    rev_hist = hist.get("revenue") or []
+
+    hist_cagr = None
+    if len(rev_hist) >= 2:
+        newest = rev_hist[0].get("val")
+        oldest = rev_hist[-1].get("val")
+        periods = max(len(rev_hist) - 1, 1)
+        if newest and oldest and oldest > 0:
+            hist_cagr = (newest / oldest) ** (1 / periods) - 1
+
+    margins = []
+    for op, dep, rev in zip(hist.get("operating_income") or [], hist.get("depreciation") or [], rev_hist):
+        rev_val = rev.get("val")
+        if rev_val:
+            margins.append(((op.get("val") or 0) + (dep.get("val") or 0)) / rev_val)
+
+    historical = {
+        "hist_cagr": hist_cagr,
+        "avg_ebitda_margin": sum(margins) / len(margins) if margins else sec_margin,
+        "ev_ebitda_ttm": round(ttm.get("ev_ebitda"), 2) if ttm.get("ev_ebitda") is not None else None,
+        "net_debt": net_debt,
+        "shares": shares,
+    }
+
+    base_upside = scenarios.get("base", {}).get("upside")
+    if base_upside is None:
+        rating, rating_color = "N/A", "neutral"
+    elif base_upside >= 0.25:
+        rating, rating_color = "BUY", "green"
+    elif base_upside >= -0.10:
+        rating, rating_color = "HOLD", "amber"
+    else:
+        rating, rating_color = "SELL", "red"
+
+    return {
+        "ticker": ticker,
+        "price": price,
+        "required_return": body.required_return,
+        "years": body.years,
+        "scenarios": scenarios,
+        "historical": historical,
+        "rating": rating,
+        "rating_color": rating_color,
+        "valuation": raw,
+        "data": d,
+    }
 
 @app.get("/debug-eu/{ticker}")
 async def debug_eu(ticker: str):
