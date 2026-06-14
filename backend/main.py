@@ -173,22 +173,33 @@ async def get_sec_fundamentals(ticker: str) -> dict | None:
 
 PRIORITY = {"yfinance": 4, "fmp": 3, "sec": 2, "twelvedata": 1}
 
-
 def merge(*sources) -> dict:
-    out:   dict = {}
-    score: dict = {}
+    out = {}
+    score = {}
+
     for s in sources:
         if not s:
             continue
-        src  = s.get("source", "unknown")
+
+        src = s.get("source", "unknown")
         conf = s.get("confidence", 0.5)
+        base_score = PRIORITY.get(src, 0) + conf
+
         for k, v in s.items():
             if k in ("source", "confidence") or v is None:
                 continue
-            sscore = PRIORITY.get(src, 0) + conf
-            if k not in out or sscore > score[k]:
-                out[k]   = v
+
+            # SPECiÁLNÍ FIX: historie nikdy nepřepisuj
+            if k == "history":
+                out.setdefault("history", v)
+                continue
+
+            sscore = base_score
+
+            if k not in out or sscore > score.get(k, -1):
+                out[k] = v
                 score[k] = sscore
+
     return out
 
 
@@ -425,26 +436,41 @@ async def company(ticker: str):
     async with httpx.AsyncClient() as client:
         d = await get_stock_data(client, ticker)
 
-    fundamentals = {k: v for k, v in d.items() if k not in ("ticker", "technical", "_history", "ohlcv")}
+    fundamentals = {
+        k: v for k, v in d.items()
+        if k not in ("ticker", "technical", "_history", "ohlcv")
+    }
 
-    history = d.get("_history")
-    if history:
-        fundamentals["history"] = history
+    history = d.get("_history") or d.get("history") or {}
+
+    fundamentals["history"] = history
 
     # Přidej název firmy pokud je dostupný (EU z yfinance)
     if "name" not in fundamentals:
         fundamentals["name"] = get_company_name(ticker)
 
-    metrics_input = {**fundamentals, "price": d.get("price")}
-    metrics = compute_metrics(metrics_input)
-
-    return {
-        "ticker":       ticker,
-        "name":         fundamentals.get("name"),
-        "price":        d.get("price"),
-        "fundamentals": fundamentals,
-        "metrics":      metrics,
-        "technical":    d.get("technical"),
+    metrics_input = {
+        "price": d.get("price"),
+        "shares": fundamentals.get("shares"),
+        "equity": fundamentals.get("equity"),
+        "debt": fundamentals.get("debt") or 0,
+        "cash": fundamentals.get("cash") or 0,
+        "fcf": fundamentals.get("fcf"),
+        "roic": fundamentals.get("roic"),
+        "nopat": fundamentals.get("nopat"),
+        "net_debt": fundamentals.get("net_debt"),
+        "tax_rate": fundamentals.get("tax_rate"),
+        "roe": fundamentals.get("roe"),
+        "roa": fundamentals.get("roa"),
+        "current_ratio": fundamentals.get("current_ratio"),
+        "dps": fundamentals.get("dps"),
+        "total_assets": fundamentals.get("total_assets"),
+        "eps_quarterly": fundamentals.get("eps_quarterly") or [],
+        "volume": fundamentals.get("volume"),
+        "history": fundamentals.get("history") or {},
+        "revenue": fundamentals.get("revenue"),
+        "net_income": fundamentals.get("net_income"),
+        "ebitda": fundamentals.get("ebitda"),
     }
 
 
