@@ -80,7 +80,7 @@ def model_dcf(
     net_debt: float,
     shares: float,
     wacc: float       = 0.10,
-    fcf_growth: float = 0.07,
+    fcf_growth: float = 0.06,
     terminal_growth: float = 0.025,
     years: int        = 5,
 ) -> dict:
@@ -119,6 +119,11 @@ def model_dcf(
         "pv_terminal":  pv_terminal,
         "intrinsic_ev": intrinsic_ev,
         "equity_value": equity_value,
+        "fcf":          fcf,
+        "wacc":         wacc,
+        "fcf_growth":   fcf_g,
+        "terminal_growth": t_grow,
+        "years":        years,
         "confidence":   base_conf,
     }
 
@@ -262,7 +267,7 @@ SCENARIO_PARAMS = {
         "revenue_growth_adj":   -0.05,   # revenue o 5 % níž než base
         "ebitda_margin_adj":    -0.03,   # margin stlačen
         "ev_ebitda_adj":        -0.20,   # multiple komprese
-        "fcf_growth":           -0.05,
+        "fcf_growth":           None,
         "wacc_adj":             +0.02,   # vyšší riziko
         "target_yield_adj":     +0.01,   # investoři chtějí vyšší yield
         "roic_growth_adj":      -0.02,
@@ -272,7 +277,7 @@ SCENARIO_PARAMS = {
         "revenue_growth_adj":    0.0,
         "ebitda_margin_adj":     0.0,
         "ev_ebitda_adj":         0.0,
-        "fcf_growth":            0.07,
+        "fcf_growth":           None,
         "wacc_adj":              0.0,
         "target_yield_adj":      0.0,
         "roic_growth_adj":       0.0,
@@ -282,7 +287,7 @@ SCENARIO_PARAMS = {
         "revenue_growth_adj":   +0.05,
         "ebitda_margin_adj":    +0.03,
         "ev_ebitda_adj":        +0.20,
-        "fcf_growth":           +0.15,
+        "fcf_growth":           None,
         "wacc_adj":             -0.01,   # nižší riziko / lepší podmínky
         "target_yield_adj":     -0.01,
         "roic_growth_adj":      +0.03,
@@ -353,8 +358,8 @@ def run_scenarios(
                 net_debt=net_debt,
                 shares=shares,
                 wacc=adj_wacc,
-                fcf_growth=sp["fcf_growth"],
-                terminal_growth=0.025,
+                fcf_growth=sp["fcf_growth"] if sp["fcf_growth"] is not None else adj_growth,
+                terminal_growth=0.03,
                 years=years,
             )
             adj_yield = max(0.04 + sp["target_yield_adj"], 0.01)

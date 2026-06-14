@@ -25,7 +25,7 @@ export async function getValuation(ticker, body = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      required_return: 0.12,
+      required_return: 0.10,
       years: 3,
       ...body,
     }),

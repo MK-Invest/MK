@@ -170,6 +170,11 @@ function ValuationModelsTable({ scenarios, price }) {
       <div style={{ fontSize: 11, color: "#64748B", padding: "8px 12px" }}>
         Hodnoty jsou price targety na akcii. Zelena znamena nad aktualni cenou, cervena pod aktualni cenou.
       </div>
+      {scenarios.base?.models?.dcf && (
+        <div style={{ fontSize: 11, color: "#64748B", padding: "0 12px 10px" }}>
+          Base DCF inputs: FCF <strong style={{ color: "#CBD5E1" }}>{fmtB(scenarios.base.models.dcf.fcf)}</strong>, WACC <strong style={{ color: "#CBD5E1" }}>{fmtPct(scenarios.base.models.dcf.wacc)}</strong>, FCF growth <strong style={{ color: "#CBD5E1" }}>{fmtPct(scenarios.base.models.dcf.fcf_growth)}</strong>, terminal growth <strong style={{ color: "#CBD5E1" }}>{fmtPct(scenarios.base.models.dcf.terminal_growth)}</strong>, years <strong style={{ color: "#CBD5E1" }}>{scenarios.base.models.dcf.years}</strong>.
+        </div>
+      )}
     </>
   );
 }

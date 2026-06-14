@@ -346,7 +346,7 @@ class ScenarioParams(BaseModel):
 
 
 class ValuationRequest(BaseModel):
-    required_return: float = 0.12
+    required_return: float = 0.10
     years: int = 3
     bear: ScenarioParams | None = None
     base: ScenarioParams | None = None
