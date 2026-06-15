@@ -126,11 +126,51 @@ def extract_time_series(section, concept, n=4):
         if "USD" in unit.upper():
             items = arr
             break
+
     if not items:
         items = next(iter(values.values()), [])
 
     if not items:
         return []
+
+    normalized = normalize_series(items)
+
+    fy_groups = group_by_fiscal_year(normalized)
+
+    derived = []
+
+    # raw values
+    for s in normalized:
+        derived.append({
+            "end": s["end"],
+            "val": s["val"]
+        })
+
+    # Q4 reconstruction
+    annual = [i for i in items if (i.get("form") or "").upper() == "10-K"]
+
+    for fy, qs in fy_groups.items():
+        fy_annual = next((a for a in annual if a.get("fy") == fy), None)
+        if not fy_annual:
+            continue
+
+        q4 = build_q4_from_annual(
+            qs,
+            safe_float(fy_annual.get("val")),
+            fy_annual.get("end")
+        )
+
+        if q4:
+            derived.append(q4)
+
+    # dedupe
+    seen = set()
+    cleaned = []
+
+    for x in sorted(derived, key=lambda x: x["end"], reverse=True):
+        if x["end"] not in seen:
+            seen.add(x["end"])
+            cleaned.append(x)
 
     return cleaned[:n]
 
