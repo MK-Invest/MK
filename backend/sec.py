@@ -173,7 +173,7 @@ def extract_time_series(section, concept, n=4):
             cleaned.append(x)
 
     cleaned = sorted(cleaned, key=lambda x: x["end"], reverse=True)
-
+    return cleaned
 
 def pick_first_existing(section, candidates, n=4):
     for c in candidates:
