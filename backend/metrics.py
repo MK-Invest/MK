@@ -8,6 +8,10 @@ Výstup:
   trend     — signály pro screening
 """
 
+def safe_ratio(a, b):
+    if a is None or b in (None, 0):
+        return None
+    return a / b
 
 def compute_metrics(data: dict) -> dict:
     history = data.get("history") or {}
@@ -76,11 +80,9 @@ def compute_metrics(data: dict) -> dict:
             if eb not in (None, 0):
                 q["ev_ebitda"] = ev / eb
 
-            if ni is not None and shares not in (None, 0):
-                q["eps"] = ni / shares
-
-            if ni not in (None, 0) and shares not in (None, 0):
-                q["pe"] = mc / ni
+            if ni not in (None, 0):
+                q["eps"] = ni / shares if shares else None
+                q["pe"] = mc / ni if ni else None
 
             if rev not in (None, 0):
                 q["ps"] = mc / rev

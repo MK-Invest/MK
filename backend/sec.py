@@ -128,7 +128,7 @@ def extract_time_series(section, concept, n=4):
             break
 
     if not items:
-        items = next(iter(values.values()), [])
+        items = [i for i in next(iter(values.values()), []) if i.get("end") and i.get("val") is not None]
 
     if not items:
         return []
@@ -248,22 +248,28 @@ def extract_fundamentals(data):
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "SalesRevenueNet"
     ])
+    revenue = sorted(revenue, key=lambda x: x["end"], reverse=True)
 
     net_income = pick_first_existing(gaap, [
         "NetIncomeLoss",
         "ProfitLoss"
     ])
+    net_income = sorted(revenue, key=lambda x: x["end"], reverse=True)
 
     op_income = pick_first_existing(gaap, ["OperatingIncomeLoss"])
+    op_income = sorted(revenue, key=lambda x: x["end"], reverse=True)
+    
     depreciation = pick_first_existing(gaap, [
         "DepreciationAndAmortization",
         "Depreciation",
         "DepreciationDepletionAndAmortization"
     ])
+    depreciation = sorted(revenue, key=lambda x: x["end"], reverse=True)
 
     result = {
         "revenue_ttm": compute_ttm(revenue),
-        "net_income_ttm": compute_ttm(net_income),
+        net_income_val = compute_ttm(net_income)
+        net_income_ttm = net_income_val if net_income_val and abs(net_income_val) < 1e12 else None
         "fcf": extract_fcf(gaap),
         "net_debt": extract_net_debt(gaap),
         "eps_quarterly": extract_eps_quarterly(gaap),
