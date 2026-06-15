@@ -78,22 +78,3 @@ def quarters_are_continuous(series):
             return False
 
     return True
-
-
-def clean_and_dedupe(series):
-    cleaned = [
-        q for q in series
-        if q.get("end") and isinstance(q.get("end"), str)
-    ]
-
-    cleaned.sort(key=lambda x: x["end"], reverse=True)
-
-    seen = set()
-    unique = []
-
-    for q in cleaned:
-        if q["end"] not in seen:
-            seen.add(q["end"])
-            unique.append(q)
-
-    return unique

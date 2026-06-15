@@ -55,6 +55,42 @@ def get_cik_map():
     except Exception:
         return {}
 
+def normalize_series(items):
+    out = []
+    for i in items:
+        end = i.get("end")
+        val = safe_float(i.get("val"))
+        if end and val is not None:
+            out.append({"end": end, "val": val})
+    return out
+
+
+def group_by_fiscal_year(series):
+    groups = {}
+    for s in series:
+        fy = s["end"][:4]
+        groups.setdefault(fy, []).append(s)
+
+    for fy in groups:
+        groups[fy].sort(key=lambda x: x["end"])
+
+    return groups
+
+
+def build_q4_from_annual(qs, annual_val, annual_end):
+    if not qs or annual_val is None:
+        return None
+
+    qsum = sum(x["val"] for x in qs[:3])
+    q4 = annual_val - qsum
+
+    if q4 <= 0:
+        return None
+
+    return {
+        "end": annual_end,
+        "val": q4
+    }
 
 def get_company_facts(cik: str):
     cik_padded = str(cik).zfill(10)
@@ -95,8 +131,6 @@ def extract_time_series(section, concept, n=4):
 
     if not items:
         return []
-
-    normalized = normalize_series(items)
 
     return cleaned[:n]
 
