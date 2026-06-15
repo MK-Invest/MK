@@ -483,7 +483,15 @@ async def company(ticker: str):
             "ebitda": fundamentals.get("ebitda"),
         }
 
+        print(f"[DEBUG] shares={fundamentals.get('shares')}")
+        print(f"[DEBUG] revenue={fundamentals.get('revenue')}")
+        print(f"[DEBUG] net_income={fundamentals.get('net_income')}")
+        print(f"[DEBUG] ebitda={fundamentals.get('ebitda')}")
+        print(f"[DEBUG] history_keys={list(history.keys())}")
+
         metrics = compute_metrics(metrics_input)
+
+        print(f"[DEBUG] metrics_ttm={metrics.get('ttm')}")
 
         return {
             "ticker": ticker,

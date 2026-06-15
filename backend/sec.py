@@ -201,7 +201,7 @@ def extract_eps_quarterly(gaap):
 def extract_fundamentals(data):
     facts = data.get("facts", {})
     gaap = facts.get("us-gaap", {})
-
+    shares = pick_latest_scalar(gaap, ["CommonStockSharesOutstanding"])
     revenue = pick_first_existing(gaap, [
         "Revenues",
         "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -226,6 +226,7 @@ def extract_fundamentals(data):
         "fcf": extract_fcf(gaap),
         "net_debt": extract_net_debt(gaap),
         "eps_quarterly": extract_eps_quarterly(gaap),
+        "shares": shares,
         "history": {
             "revenue": revenue,
             "net_income": net_income,

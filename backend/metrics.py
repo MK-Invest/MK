@@ -37,10 +37,10 @@ def compute_metrics(data: dict) -> dict:
     op_series         = history.get("operating_income") or []
     dep_series        = history.get("depreciation") or []
 
-    if not revenue_series:
+    if not revenue_series and not net_income_series:
         return {"quarters": [], "ttm": {}, "trend": {}}
 
-    ebitda_series = compute_quarterly_ebitda(op_series, dep_series)
+    ebitda_series = compute_quarterly_ebitda(op_series, dep_series) or []
 
     mc = None
     ev = None
