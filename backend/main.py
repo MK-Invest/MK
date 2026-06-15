@@ -525,18 +525,22 @@ async def valuation(ticker: str, body: ValuationRequest):
     revenue = d.get("revenue") or 0
     net_debt = d.get("net_debt") or 0
 
+    fcf = d.get("fcf")
+    revenue = d.get("revenue") or 0
+    net_debt = d.get("net_debt") or 0
+
     input_data = {
         "revenue": revenue,
         "ebitda_margin": base_override.get("ebitda_margin") or sec_margin or 0.20,
         "ev_ebitda_multiple": base_override.get("ev_ebitda_multiple") or 15.0,
         "net_debt": net_debt,
         "shares": shares,
-        "fcf": d.get("fcf"),
+        "fcf": fcf,
         "nopat": d.get("nopat"),
         "roic": d.get("roic"),
         "revenue_growth": base_override.get("revenue_cagr") or d.get("revenue_growth") or 0.05,
         "tax_rate": d.get("tax_rate"),
-        "fcf_margin": d.get("fcf") / revenue if revenue else None,
+        "fcf_margin": (fcf / revenue) if (revenue and fcf is not None) else None,  # ← FIX
     }
 
     overrides = {
