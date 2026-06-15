@@ -172,7 +172,7 @@ def extract_time_series(section, concept, n=4):
             seen.add(x["end"])
             cleaned.append(x)
 
-    return cleaned[:n]
+    cleaned = sorted(cleaned, key=lambda x: x["end"], reverse=True)
 
 
 def pick_first_existing(section, candidates, n=4):
@@ -216,9 +216,6 @@ def extract_fcf(gaap):
     if cfo_ttm is None or capex_ttm is None:
         return None
 
-    if cfo_ttm is None or capex_ttm is None:
-        return None
-
     return cfo_ttm - capex_ttm
 
 
@@ -254,23 +251,25 @@ def extract_fundamentals(data):
         "NetIncomeLoss",
         "ProfitLoss"
     ])
-    net_income = sorted(revenue, key=lambda x: x["end"], reverse=True)
+    net_income = sorted(net_income, key=lambda x: x["end"], reverse=True)
 
     op_income = pick_first_existing(gaap, ["OperatingIncomeLoss"])
-    op_income = sorted(revenue, key=lambda x: x["end"], reverse=True)
+    op_income = sorted(op_income, key=lambda x: x["end"], reverse=True)
     
     depreciation = pick_first_existing(gaap, [
         "DepreciationAndAmortization",
         "Depreciation",
         "DepreciationDepletionAndAmortization"
     ])
-    depreciation = sorted(revenue, key=lambda x: x["end"], reverse=True)
+    depreciation = sorted(depreciation, key=lambda x: x["end"], reverse=True)
+
+    net_income_val = compute_ttm(net_income)
+    net_income_ttm = net_income_val if net_income_val and abs(net_income_val) < 1e12 else None
 
     result = {
         "revenue_ttm": compute_ttm(revenue),
-        net_income_val = compute_ttm(net_income)
-        net_income_ttm = net_income_val if net_income_val and abs(net_income_val) < 1e12 else None
-        "fcf": extract_fcf(gaap),
+        "net_income_ttm": net_income_ttm if isinstance(net_income_ttm, (int, float)) else None,
+        "fcf_ttm": extract_fcf(gaap),
         "net_debt": extract_net_debt(gaap),
         "eps_quarterly": extract_eps_quarterly(gaap),
         "shares": shares,
