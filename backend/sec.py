@@ -96,40 +96,7 @@ def extract_time_series(section, concept, n=4):
     if not items:
         return []
 
-    quarterly = [i for i in items if (i.get("form") or "").upper() == "10-Q"]
-    annual = [i for i in items if (i.get("form") or "").upper() == "10-K"]
-
-    quarterly.sort(key=lambda x: x.get("end", ""))
-
-    fy_groups = defaultdict(list)
-    for q in quarterly:
-        fy = (q.get("fy") or q.get("end", "")[:4])
-        fy_groups[fy].append(q)
-
-    derived = []
-
-    for fy, qs in fy_groups.items():
-        qs = sorted(qs, key=lambda x: x.get("end", ""))
-
-        for q in qs:
-            v = safe_float(q.get("val"))
-            if v is not None:
-                derived.append({"end": q["end"], "val": v})
-
-        fy_annual = next((a for a in annual if a.get("fy") == fy), None)
-        if fy_annual:
-            fy_val = safe_float(fy_annual.get("val"))
-            if fy_val is not None and len(qs) >= 3:
-                q4 = fy_val - sum(safe_float(v.get("val")) or 0 for v in qs[:3])
-                if 0 < q4 < fy_val:
-                    derived.append({"end": fy_annual["end"], "val": q4})
-
-    seen = set()
-    cleaned = []
-    for x in sorted(derived, key=lambda x: x["end"], reverse=True):
-        if x["end"] not in seen:
-            seen.add(x["end"])
-            cleaned.append(x)
+    normalized = normalize_series(items)
 
     return cleaned[:n]
 
@@ -221,8 +188,8 @@ def extract_fundamentals(data):
     ])
 
     result = {
-        "revenue": compute_ttm(revenue),
-        "net_income": compute_ttm(net_income),
+        "revenue_ttm": compute_ttm(revenue),
+        "net_income_ttm": compute_ttm(net_income),
         "fcf": extract_fcf(gaap),
         "net_debt": extract_net_debt(gaap),
         "eps_quarterly": extract_eps_quarterly(gaap),
