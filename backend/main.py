@@ -529,18 +529,57 @@ async def valuation(ticker: str, body: ValuationRequest):
     revenue = d.get("revenue") or 0
     net_debt = d.get("net_debt") or 0
 
+    # ── Odvozené vstupy z reálných dat ──────────────────────────────
+    ebitda       = d.get("ebitda")
+    net_income   = d.get("net_income")
+
+    # EBITDA margin: preferuj sec_margin (yfinance), jinak spočítej z EBITDA/revenue
+    if sec_margin:
+        derived_margin = sec_margin
+    elif ebitda and revenue:
+        derived_margin = ebitda / revenue
+    elif net_income and revenue:
+        # hrubý proxy: NI margin jako dolní odhad (konzervativní)
+        derived_margin = (net_income / revenue) * 1.4   # typicky EBITDA ≈ 1.4× NI margin
+    else:
+        derived_margin = 0.20   # hard fallback pouze pokud vůbec nejsou data
+
+    # EV/EBITDA multiple: odvoď z TTM metrik nebo sektoru
+    # Výchozí: konzervativních 20× (blíž realitě než 15× pro large-cap growth)
+    derived_multiple = base_override.get("ev_ebitda_multiple")
+    if not derived_multiple:
+        ttm_metrics = compute_metrics({**d, "history": d.get("_history") or d.get("history") or {}})
+        ttm_ev_ebitda = (ttm_metrics.get("ttm") or {}).get("ev_ebitda")
+        if ttm_ev_ebitda and 5 < ttm_ev_ebitda < 60:
+            # Použij TTM EV/EBITDA jako výchozí multiple (trh dává signal)
+            derived_multiple = round(ttm_ev_ebitda, 1)
+        else:
+            derived_multiple = 20.0
+
+    # Revenue growth: historický CAGR z posledních dostupných kvartálů
+    derived_growth = base_override.get("revenue_cagr") or d.get("revenue_growth")
+    if not derived_growth:
+        rev_hist = (d.get("_history") or d.get("history") or {}).get("revenue") or []
+        if len(rev_hist) >= 5:
+            newest = rev_hist[0].get("val")
+            oldest = rev_hist[4].get("val")   # 4 kvartály zpět ≈ 1 rok
+            if newest and oldest and oldest > 0:
+                derived_growth = (newest / oldest) - 1   # YoY growth
+        if not derived_growth:
+            derived_growth = 0.05   # fallback 5 %
+
     input_data = {
-        "revenue": revenue,
-        "ebitda_margin": base_override.get("ebitda_margin") or sec_margin or 0.20,
-        "ev_ebitda_multiple": base_override.get("ev_ebitda_multiple") or 15.0,
-        "net_debt": net_debt,
-        "shares": shares,
-        "fcf": fcf,
-        "nopat": d.get("nopat"),
-        "roic": d.get("roic"),
-        "revenue_growth": base_override.get("revenue_cagr") or d.get("revenue_growth") or 0.05,
-        "tax_rate": d.get("tax_rate"),
-        "fcf_margin": (fcf / revenue) if (revenue and fcf is not None) else None,  # ← FIX
+        "revenue":           revenue,
+        "ebitda_margin":     base_override.get("ebitda_margin") or derived_margin,
+        "ev_ebitda_multiple": derived_multiple,
+        "net_debt":          net_debt,
+        "shares":            shares,
+        "fcf":               fcf,
+        "nopat":             d.get("nopat"),
+        "roic":              d.get("roic"),
+        "revenue_growth":    derived_growth,
+        "tax_rate":          d.get("tax_rate"),
+        "fcf_margin":        (fcf / revenue) if (revenue and fcf is not None) else None,
     }
 
     overrides = {

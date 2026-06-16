@@ -114,18 +114,43 @@ def _is_quarterly_period(i):
     """
     True pokud je záznam čistě čtvrtletní perioda (~60–135 dní).
     Filtruje YTD kumulativní záznamy (H1, 9M apod.).
-    Primárně kontroluje start→end delta, sekundárně fp pole.
+
+    SEC data mají dva typy 10-Q záznamů:
+      A) s polem "start" → přímý výpočet delta (spolehlivé)
+      B) bez "start" → musíme použít fp pole, ALE fp="Q3" může být
+         YTD (9 měsíců) nebo skutečný Q3. Rozlišení:
+         - form="10-Q" + fp="Q1" → vždy čistý kvartál (~90 dní od FY start)
+         - form="10-Q" + fp="Q2" → může být 6M YTD nebo čistý Q2
+         - form="10-Q" + fp="Q3" → může být 9M YTD nebo čistý Q3
+         Bezpečné pravidlo: přijmeme POUZE fp="Q1" bez start pole,
+         Q2/Q3 bez start pole odmítneme (pravděpodobně YTD).
+         Q4 se rekonstruuje z ročního záznamu.
     """
     start = i.get("start", "")
     end   = i.get("end",   "")
+    fp    = i.get("fp", "")
+
+    # Primární: start→end delta
     if start and end:
         try:
             delta = (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days
             return 60 <= delta <= 135
         except Exception:
             pass
-    # fallback: fp pole
-    return i.get("fp") in {"Q1", "Q2", "Q3", "Q4"}
+
+    # Sekundární: fp pole bez start
+    if not start:
+        # Q1 bez start = bezpečné (vždy ~90 dní od FY start)
+        if fp == "Q1":
+            return True
+        # Q2/Q3 bez start = pravděpodobně YTD → odmítni
+        if fp in {"Q2", "Q3"}:
+            return False
+        # Q4 bez start = nepoužívej přímo, rekonstruuj z 10-K
+        if fp == "Q4":
+            return False
+
+    return False
 
 
 def extract_time_series(section, concept, n=20):
@@ -157,12 +182,51 @@ def extract_time_series(section, concept, n=20):
     cutoff = f"{cutoff_year}-01-01"
 
     # ── 1) Čisté quarterly záznamy ───────────────────────────────────
-    quarterlies = [
+    # Záznamy bez "start" pole a fp=Q2/Q3 jsou potenciálně YTD kumulativní.
+    # Pro firmy kde SEC data mají "start" u všech quarterly → _is_quarterly_period() postačí.
+    # Pro firmy kde "start" chybí (PFE apod.) → zkusíme YTD dedukci z hodnot (viz níže).
+    quarterlies_raw = [
         i for i in items
-        if _is_quarterly_period(i)
+        if i.get("fp") in {"Q1", "Q2", "Q3", "Q4"}
         and i.get("end", "") >= cutoff
         and i.get("val") is not None
     ]
+    # Preferuj záznamy s "start" polem (delta-check spolehlivý)
+    has_start = any(i.get("start") for i in quarterlies_raw)
+    if has_start:
+        quarterlies = [i for i in quarterlies_raw if _is_quarterly_period(i)]
+    else:
+        # Bez "start": Q1 je vždy čistý, Q2/Q3 mohou být YTD.
+        # Pokus o detekci YTD: pokud val[Q2] > val[Q1]*1.5 v témže FY → pravděpodobně YTD.
+        # V takovém případě odmítneme Q2/Q3 a spoléháme na Q4 rekonstrukci.
+        q1_vals_by_fy = {}
+        for i in quarterlies_raw:
+            if i.get("fp") == "Q1":
+                fy = str(i.get("fy") or i["end"][:4])
+                q1_vals_by_fy[fy] = safe_float(i.get("val")) or 0
+
+        quarterlies = []
+        for i in quarterlies_raw:
+            fp = i.get("fp")
+            fy = str(i.get("fy") or i["end"][:4])
+            val = safe_float(i.get("val")) or 0
+            q1 = q1_vals_by_fy.get(fy, 0)
+
+            if fp == "Q1":
+                quarterlies.append(i)
+            elif fp == "Q2":
+                # YTD Q2 by byl ~2× Q1; čistý Q2 by byl podobný Q1
+                if q1 > 0 and val > q1 * 1.7:
+                    pass  # pravděpodobně YTD → přeskoč
+                else:
+                    quarterlies.append(i)
+            elif fp == "Q3":
+                # YTD Q3 by byl ~3× Q1; čistý Q3 by byl podobný Q1
+                if q1 > 0 and val > q1 * 2.2:
+                    pass  # pravděpodobně YTD → přeskoč
+                else:
+                    quarterlies.append(i)
+            # Q4 přeskočíme, rekonstruujeme z 10-K
 
     # ── 2) Annual záznamy pro Q4 rekonstrukci ────────────────────────
     annual = [

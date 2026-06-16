@@ -325,10 +325,14 @@ def run_scenarios(
 
     fcf = _safe(input_data.get("fcf"))
 
-    if fcf is None and revenue > 0:
-        # fallback estimate (TEMP fix)
-        fcf = revenue * 0.12   # MSFT-like default margin proxy
-    
+    # FCF margin fallback: pouze pokud máme explicitní fcf_margin z UI/data
+    # NIKDY neodhad z revenue bez reálných dat — to způsobuje nesmyslné DCF targety
+    if fcf is None:
+        fcf_margin = _safe(input_data.get("fcf_margin"))
+        if fcf_margin is not None and revenue > 0:
+            fcf = revenue * fcf_margin
+        # jinak fcf zůstane None → DCF a FCF Yield modely se prostě nespustí
+
     nopat = _safe(input_data.get("nopat"))
     roic = _safe(input_data.get("roic"))
     scenario_overrides = scenario_overrides or {}
