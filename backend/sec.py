@@ -285,11 +285,25 @@ def extract_time_series(section, concept, n=20):
 
 
 def pick_first_existing(section, candidates, n=20):
+    """
+    Vrátí sérii od kandidáta s NEJNOVĚJŠÍMI daty.
+    Pokud více kandidátů má záznamy, vyhraje ten s nejnovějším end datem.
+    Tím se správně vybere 'Revenues' nad 'RevenueFromContractWithCustomer...'
+    i když oba mají záznamy, ale druhý má novější data (např. PFE po 2022).
+    """
+    best_series = []
+    best_end = ""
+
     for c in candidates:
         s = extract_time_series(section, c, n)
-        if s:
-            return s
-    return []
+        if not s:
+            continue
+        newest = s[0]["end"]  # series je DESC, první = nejnovější
+        if newest > best_end:
+            best_end = newest
+            best_series = s
+
+    return best_series
 
 
 def pick_latest_scalar(section, candidates):
