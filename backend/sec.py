@@ -55,6 +55,7 @@ def get_cik_map():
     except Exception:
         return {}
 
+
 def normalize_series(items):
     out = []
     for i in items:
@@ -70,27 +71,20 @@ def group_by_fiscal_year(series):
     for s in series:
         fy = s["end"][:4]
         groups.setdefault(fy, []).append(s)
-
     for fy in groups:
         groups[fy].sort(key=lambda x: x["end"])
-
     return groups
 
 
 def build_q4_from_annual(qs, annual_val, annual_end):
     if not qs or annual_val is None:
         return None
-
     qsum = sum(x["val"] for x in qs[:3])
     q4 = annual_val - qsum
-
     if q4 <= 0:
         return None
+    return {"end": annual_end, "val": q4}
 
-    return {
-        "end": annual_end,
-        "val": q4
-    }
 
 def get_company_facts(cik: str):
     cik_padded = str(cik).zfill(10)
@@ -116,19 +110,34 @@ def extract_latest_value(section, concept):
     return None
 
 
+def _is_quarterly_period(i):
+    """
+    True pokud je záznam čistě čtvrtletní perioda (~60–135 dní).
+    Filtruje YTD kumulativní záznamy (H1, 9M apod.).
+    Primárně kontroluje start→end delta, sekundárně fp pole.
+    """
+    start = i.get("start", "")
+    end   = i.get("end",   "")
+    if start and end:
+        try:
+            delta = (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days
+            return 60 <= delta <= 135
+        except Exception:
+            pass
+    # fallback: fp pole
+    return i.get("fp") in {"Q1", "Q2", "Q3", "Q4"}
+
+
 def extract_time_series(section, concept, n=20):
     """
     Vrátí quarterly sérii pro daný GAAP concept, nejnovější záznamy první.
 
     Strategie:
-      1. Preferuj záznamy s fp in (Q1, Q2, Q3, Q4) — čisté quarterlies.
-      2. Pokud quarterlies chybí nebo je jich méně než 4, rekonstruuj Q4
-         z ročního záznamu (10-K) mínus Q1–Q3 daného FY.
-      3. Omez výstup na záznamy z posledních 4 let (16 kvartálů stačí pro
-         veškerou analýzu) — zabraňuje zobrazení dat z roku 2007.
+      1. Filtruj jen čisté quarterly záznamy (perioda ~90 dní) — odstraní
+         YTD/kumulativní záznamy z 10-Q i roční záznamy z 10-K.
+      2. Rekonstruuj Q4 = FY − Q1−Q2−Q3 z ročního záznamu (10-K).
+      3. Omez na záznamy z posledních 5 let.
     """
-    import datetime as _dt
-
     values = section.get(concept, {}).get("units", {})
     if not values:
         return []
@@ -144,20 +153,18 @@ def extract_time_series(section, concept, n=20):
     if not items:
         return []
 
-    # cutoff: záznamy starší než 5 let ignorujeme
-    cutoff_year = _dt.date.today().year - 5
+    cutoff_year = datetime.date.today().year - 5
     cutoff = f"{cutoff_year}-01-01"
 
-    # ── 1) Quarterly záznamy (fp Q1–Q4) ──────────────────────────────
-    quarterly_fps = {"Q1", "Q2", "Q3", "Q4"}
+    # ── 1) Čisté quarterly záznamy ───────────────────────────────────
     quarterlies = [
         i for i in items
-        if i.get("fp") in quarterly_fps
+        if _is_quarterly_period(i)
         and i.get("end", "") >= cutoff
         and i.get("val") is not None
     ]
 
-    # ── 2) Annual záznamy (10-K) pro Q4 rekonstrukci ─────────────────
+    # ── 2) Annual záznamy pro Q4 rekonstrukci ────────────────────────
     annual = [
         i for i in items
         if (i.get("form") or "").upper() == "10-K"
@@ -165,13 +172,12 @@ def extract_time_series(section, concept, n=20):
         and i.get("val") is not None
     ]
 
-    # ── 3) Q4 rekonstrukce ────────────────────────────────────────────
+    # ── 3) Q4 rekonstrukce: Q4 = FY − Q1 − Q2 − Q3 ──────────────────
     reconstructed = []
     if annual:
-        # seskup quarterlies podle FY
-        fy_q: dict = {}
+        fy_q = {}
         for q in quarterlies:
-            fy = q.get("fy") or q["end"][:4]
+            fy = str(q.get("fy") or q["end"][:4])
             fy_q.setdefault(fy, []).append(q)
 
         for ann in annual:
@@ -184,12 +190,11 @@ def extract_time_series(section, concept, n=20):
                     ann["end"],
                 )
                 if q4:
-                    # ujisti se, že Q4 datum není duplicitní s existujícím Q
                     exists = any(q["end"] == q4["end"] for q in quarterlies)
                     if not exists:
                         reconstructed.append(q4)
 
-    # ── 4) Merge + dedupe ─────────────────────────────────────────────
+    # ── 4) Merge ──────────────────────────────────────────────────────
     all_items = []
     for i in quarterlies:
         v = safe_float(i.get("val"))
@@ -197,31 +202,15 @@ def extract_time_series(section, concept, n=20):
             all_items.append({"end": i["end"], "val": v})
     all_items.extend(reconstructed)
 
-    # fallback: pokud stále nemáme nic (firma nereportuje fp), vezmi
-    # záznamy s délkou periody ~90 dní (start→end)
-    if not all_items:
-        for i in items:
-            if i.get("end", "") < cutoff or i.get("val") is None:
-                continue
-            start = i.get("start", "")
-            end   = i.get("end",   "")
-            if start and end:
-                try:
-                    delta = (_dt.date.fromisoformat(end) - _dt.date.fromisoformat(start)).days
-                    if 60 <= delta <= 135:   # přibližně čtvrtletní perioda
-                        v = safe_float(i.get("val"))
-                        if v is not None:
-                            all_items.append({"end": end, "val": v})
-                except Exception:
-                    pass
-            # pokud ani start nemáme, přidej cokoliv z posledních 5 let
-            elif not start:
-                v = safe_float(i.get("val"))
-                if v is not None:
-                    all_items.append({"end": end, "val": v})
+    # Fallback: pokud stále prázdné (žádné quarterly), vrať alespoň roční
+    if not all_items and annual:
+        for ann in annual:
+            v = safe_float(ann.get("val"))
+            if v is not None:
+                all_items.append({"end": ann["end"], "val": v})
 
-    # dedupe by end (newest wins)
-    seen: set = set()
+    # ── 5) Dedupe + sort DESC ─────────────────────────────────────────
+    seen = set()
     cleaned = []
     for x in sorted(all_items, key=lambda x: x["end"], reverse=True):
         if x["end"] not in seen:
@@ -230,7 +219,8 @@ def extract_time_series(section, concept, n=20):
 
     return cleaned[:n]
 
-def pick_first_existing(section, candidates, n=4):
+
+def pick_first_existing(section, candidates, n=20):
     for c in candidates:
         s = extract_time_series(section, c, n)
         if s:
@@ -243,6 +233,24 @@ def pick_latest_scalar(section, candidates):
         v = extract_latest_value(section, c)
         if v is not None:
             return v
+    return None
+
+
+def pick_latest_scalar_any_unit(section, candidates):
+    """
+    Jako pick_latest_scalar, ale prohledá i non-USD jednotky (shares, pure numbers).
+    Použij pro CommonStockSharesOutstanding apod.
+    """
+    for concept in candidates:
+        units = section.get(concept, {}).get("units", {})
+        for unit_items in units.values():
+            if not unit_items:
+                continue
+            best = select_best(unit_items)
+            if best:
+                v = safe_float(best.get("val"))
+                if v is not None:
+                    return v
     return None
 
 
@@ -262,41 +270,47 @@ def compute_ttm(series, annual_series=None):
 
 
 def extract_fcf(gaap):
-    cfo = pick_first_existing(gaap, ["NetCashProvidedByOperatingActivities"])
-    capex = pick_first_existing(gaap, ["CapitalExpenditures"])
+    cfo   = pick_first_existing(gaap, ["NetCashProvidedByOperatingActivities"])
+    capex = pick_first_existing(gaap, [
+        "CapitalExpenditures",
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+    ])
 
-    cfo_ttm = compute_ttm(cfo)
+    cfo_ttm   = compute_ttm(cfo)
     capex_ttm = compute_ttm(capex)
 
     if cfo_ttm is None or capex_ttm is None:
         return None
 
-    return cfo_ttm - capex_ttm
+    return cfo_ttm - abs(capex_ttm)  # capex bývá záporný v CF, abs() pro jistotu
 
 
 def extract_net_debt(gaap):
-    lt = pick_latest_scalar(gaap, ["LongTermDebt"]) or 0
-    st = pick_latest_scalar(gaap, ["DebtCurrent"]) or 0
+    lt   = pick_latest_scalar(gaap, ["LongTermDebt"]) or 0
+    st   = pick_latest_scalar(gaap, ["DebtCurrent"]) or 0
     cash = pick_latest_scalar(gaap, ["CashAndCashEquivalentsAtCarryingValue"]) or 0
     return (lt + st) - cash
 
 
-def extract_eps_quarterly(gaap):
+def extract_eps_quarterly(gaap, shares):
     ni = pick_first_existing(gaap, ["NetIncomeLoss"])
-    shares = pick_latest_scalar(gaap, ["CommonStockSharesOutstanding"])
-
     if not ni or not shares:
         return []
-
     return [{"end": q["end"], "eps": q["val"] / shares} for q in ni[:4] if q.get("val")]
 
 
 def extract_fundamentals(data):
     facts = data.get("facts", {})
-    gaap = facts.get("us-gaap", {})
-    shares = pick_latest_scalar(gaap, ["CommonStockSharesOutstanding"])
+    gaap  = facts.get("us-gaap", {})
 
-    # Revenue — rozšířený seznam kandidátů pokrývá i PFE/pharma
+    # Shares — prohledej i non-USD jednotky (PFE reportuje shares bez USD)
+    shares = pick_latest_scalar_any_unit(gaap, [
+        "CommonStockSharesOutstanding",
+        "CommonStockSharesIssued",
+        "EntityCommonStockSharesOutstanding",
+    ])
+
+    # Revenue — pořadí kandidátů: nejnovější GAAP standard první
     revenue = pick_first_existing(gaap, [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
@@ -333,15 +347,14 @@ def extract_fundamentals(data):
     net_income_ttm = net_income_val if net_income_val and abs(net_income_val) < 1e12 else None
 
     result = {
-        # klíče které main.py merge engine čte přes get("revenue") atd.
-        "revenue":    revenue_ttm,
-        "net_income": net_income_ttm,
-        "fcf":        extract_fcf(gaap),
-        "net_debt":   extract_net_debt(gaap),
-        "eps_quarterly": extract_eps_quarterly(gaap),
-        "shares":     shares,
-        "source":     "sec",
-        "confidence": 0.85,
+        "revenue":       revenue_ttm,
+        "net_income":    net_income_ttm,
+        "fcf":           extract_fcf(gaap),
+        "net_debt":      extract_net_debt(gaap),
+        "eps_quarterly": extract_eps_quarterly(gaap, shares),
+        "shares":        shares,
+        "source":        "sec",
+        "confidence":    0.85,
         "history": {
             "revenue":          revenue,
             "net_income":       net_income,
