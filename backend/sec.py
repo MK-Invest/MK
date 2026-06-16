@@ -110,22 +110,111 @@ def extract_latest_value(section, concept):
     return None
 
 
+def _dedupe_by_end(items):
+    """Deduplikace podle end data, nejnovější verze vyhrává."""
+    seen = set()
+    result = []
+    for x in sorted(items, key=lambda x: x["end"], reverse=True):
+        if x["end"] not in seen:
+            seen.add(x["end"])
+            result.append(x)
+    return result
+
+
+def _filter_quarterly_by_delta(items, cutoff):
+    """
+    Filtruje záznamy kde start->end delta je 60–135 dní (čisté quarterly).
+    Vrátí jen záznamy kde start pole existuje.
+    """
+    result = []
+    for i in items:
+        if i.get("end", "") < cutoff or i.get("val") is None:
+            continue
+        start = i.get("start", "")
+        end   = i.get("end", "")
+        if not start:
+            continue
+        try:
+            delta = (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days
+            if 60 <= delta <= 135:
+                result.append({"end": end, "val": safe_float(i["val"])})
+        except Exception:
+            pass
+    return result
+
+
+def _ytd_to_quarterly(items, cutoff):
+    """
+    Konverze YTD kumulativních záznamů na čisté quarterly hodnoty.
+    Používá se pro firmy bez 'start' pole (např. PFE) kde SEC vrací
+    YTD hodnoty pod fp=Q1/Q2/Q3.
+
+    Logika:
+      Q1 = YTD_Q1                (přímý, vždy čistý)
+      Q2 = YTD_Q2 - YTD_Q1
+      Q3 = YTD_Q3 - YTD_Q2
+      Q4 = FY_annual - YTD_Q3   (z 10-K)
+
+    Výsledek: list {"end": ..., "val": ...} čistých quarterly hodnot.
+    """
+    # Seskup podle roku end data (funguje pro posunutý i kalendářní fiskál)
+    by_year = {}
+    for i in items:
+        if i.get("end", "") < cutoff or i.get("val") is None:
+            continue
+        year = i["end"][:4]
+        fp   = i.get("fp", "")
+        form = (i.get("form") or "").upper()
+        v    = safe_float(i["val"])
+        if v is None:
+            continue
+        if fp in ("Q1", "Q2", "Q3"):
+            by_year.setdefault(year, {})[fp] = {"end": i["end"], "val": v}
+        elif "10-K" in form or fp in ("FY", "A"):
+            by_year.setdefault(year, {})["FY"] = {"end": i["end"], "val": v}
+
+    result = []
+    for year, periods in by_year.items():
+        q1     = periods.get("Q1")
+        q2_ytd = periods.get("Q2")
+        q3_ytd = periods.get("Q3")
+        fy_ann = periods.get("FY")
+
+        # Q1 — přímá hodnota
+        if q1:
+            result.append({"end": q1["end"], "val": q1["val"]})
+
+        # Q2 = YTD_Q2 - Q1
+        if q1 and q2_ytd and q2_ytd["val"] > q1["val"]:
+            result.append({"end": q2_ytd["end"], "val": q2_ytd["val"] - q1["val"]})
+
+        # Q3 = YTD_Q3 - YTD_Q2
+        if q2_ytd and q3_ytd and q3_ytd["val"] > q2_ytd["val"]:
+            result.append({"end": q3_ytd["end"], "val": q3_ytd["val"] - q2_ytd["val"]})
+
+        # Q4 = FY - YTD_Q3
+        if q3_ytd and fy_ann and fy_ann["val"] > q3_ytd["val"]:
+            result.append({"end": fy_ann["end"], "val": fy_ann["val"] - q3_ytd["val"]})
+        # Q4 = FY - Q1 (pokud máme jen Q1 a FY)
+        elif q1 and fy_ann and not q2_ytd and not q3_ytd:
+            q4_val = fy_ann["val"] - q1["val"]
+            if q4_val > 0:
+                result.append({"end": fy_ann["end"], "val": q4_val})
+
+    return result
+
 
 def extract_time_series(section, concept, n=20):
     """
     Vrátí quarterly sérii pro daný GAAP concept, nejnovější záznamy první.
 
-    Jednoduchá strategie — bez řešení fiskálního roku:
-      1. Vezmi všechny záznamy s end >= cutoff (5 let zpět).
-      2. Čisté quarterly = záznamy kde end-start delta je 60–135 dní.
-         Pro záznamy bez "start" pole akceptuj pouze fp=Q1 (vždy čistý)
-         nebo záznamy z 10-Q kde neexistuje novější záznam se stejným end
-         (deduplication).
-      3. Rekonstruuj chybějící periody z ročního 10-K: Q_missing = FY - ostatní.
-      4. Seřaď DESC a vrať posledních n záznamů.
+    Dvě strategie podle toho co SEC vrátí:
+    A) Záznamy mají 'start' pole → delta filtr 60-135 dní (spolehlivé)
+    B) Záznamy nemají 'start' pole → filtr podle rozestupu end dat
+       (detekuje kumulativy protože ty mají end datumy blízko u sebe
+       v rámci roku, zatímco čisté quarterly jsou ~90 dní od sebe)
 
-    Tím je jedno jestli má firma kalendářní nebo posunutý fiskál —
-    vždy dostaneš nejnovější dostupná data.
+    Navíc: Q4 rekonstrukce z 10-K.
     """
     values = section.get(concept, {}).get("units", {})
     if not values:
@@ -145,67 +234,45 @@ def extract_time_series(section, concept, n=20):
     cutoff_year = datetime.date.today().year - 5
     cutoff = f"{cutoff_year}-01-01"
 
-    recent = [i for i in items if i.get("end", "") >= cutoff and i.get("val") is not None]
+    # ── Strategie A: záznamy se start polem ──────────────────────────
+    has_start = any(i.get("start") for i in items if i.get("end", "") >= cutoff)
 
-    # ── Klasifikuj záznamy ───────────────────────────────────────────
-    quarterly = []   # čisté quarterly záznamy
-    annual    = []   # roční záznamy (10-K) pro rekonstrukci
+    if has_start:
+        quarterly = _filter_quarterly_by_delta(items, cutoff)
+    else:
+        # ── Strategie B: YTD→quarterly konverze ──────────────────────
+        quarterly = _ytd_to_quarterly(items, cutoff)
 
-    for i in recent:
-        form  = (i.get("form") or "").upper()
-        start = i.get("start", "")
-        end   = i.get("end",   "")
-        fp    = i.get("fp",    "")
+    # ── Roční záznamy pro Q4 rekonstrukci ────────────────────────────
+    annual = [
+        i for i in items
+        if (i.get("form") or "").upper() == "10-K"
+        and i.get("end", "") >= cutoff
+        and i.get("val") is not None
+    ]
 
-        if "10-K" in form:
-            annual.append(i)
-            continue
-
-        if start and end:
-            try:
-                delta = (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days
-                if 60 <= delta <= 135:
-                    quarterly.append(i)
-                # YTD kumulativy (delta > 135) ignoruj
-            except Exception:
-                pass
-        else:
-            # Bez "start" pole: akceptuj pouze fp=Q1 (vždy čistý ~90 dní od FY start)
-            # Q2/Q3 bez start jsou potenciálně YTD → odmítni
-            # Q4 rekonstruujeme z 10-K
-            if fp == "Q1":
-                quarterly.append(i)
-
-    # ── Q4 rekonstrukce: Q4 = 10-K value − Q1 − Q2 − Q3 ────────────
+    # ── Q4 rekonstrukce ──────────────────────────────────────────────
     reconstructed = []
-    # seskup quarterly podle (fy, end_year) — funguje pro oba typy fiskálu
-    fy_q: dict = {}
-    for q in quarterly:
-        # klíč = rok end data (pro posunutý fiskál PFE: Q4 2024 má end 2024-12-31)
-        key = str(q.get("fy") or q["end"][:4])
-        fy_q.setdefault(key, []).append(q)
+    if annual:
+        fy_q: dict = {}
+        for q in quarterly:
+            key = q["end"][:4]
+            fy_q.setdefault(key, []).append(q)
 
-    for ann in annual:
-        key = str(ann.get("fy") or ann["end"][:4])
-        qs  = sorted(fy_q.get(key, []), key=lambda x: x["end"])
-        if len(qs) >= 3:
-            q4 = build_q4_from_annual(
-                [{"val": safe_float(q["val"])} for q in qs[:3]],
-                safe_float(ann["val"]),
-                ann["end"],
-            )
-            if q4:
-                # přidej jen pokud daný end ještě nemáme
-                if not any(q["end"] == q4["end"] for q in quarterly):
+        for ann in annual:
+            key = ann["end"][:4]
+            qs  = sorted(fy_q.get(key, []), key=lambda x: x["end"])
+            if len(qs) >= 3:
+                q4 = build_q4_from_annual(
+                    qs[:3],
+                    safe_float(ann["val"]),
+                    ann["end"],
+                )
+                if q4 and not any(q["end"] == q4["end"] for q in quarterly):
                     reconstructed.append(q4)
 
-    # ── Merge, dedupe, sort DESC ─────────────────────────────────────
-    all_items = []
-    for i in quarterly:
-        v = safe_float(i.get("val"))
-        if v is not None:
-            all_items.append({"end": i["end"], "val": v})
-    all_items.extend(reconstructed)
+    # ── Merge + dedupe + sort DESC ────────────────────────────────────
+    all_items = quarterly + reconstructed
 
     # Fallback: pokud stále prázdné, vezmi roční záznamy
     if not all_items:
@@ -214,14 +281,7 @@ def extract_time_series(section, concept, n=20):
             if v is not None:
                 all_items.append({"end": ann["end"], "val": v})
 
-    seen: set = set()
-    cleaned = []
-    for x in sorted(all_items, key=lambda x: x["end"], reverse=True):
-        if x["end"] not in seen:
-            seen.add(x["end"])
-            cleaned.append(x)
-
-    return cleaned[:n]
+    return _dedupe_by_end(all_items)[:n]
 
 
 def pick_first_existing(section, candidates, n=20):
@@ -242,7 +302,7 @@ def pick_latest_scalar(section, candidates):
 
 def pick_latest_scalar_any_unit(section, candidates):
     """
-    Jako pick_latest_scalar, ale prohledá i non-USD jednotky (shares, pure numbers).
+    Prohledá i non-USD jednotky (shares, pure numbers).
     Použij pro CommonStockSharesOutstanding apod.
     """
     for concept in candidates:
@@ -286,7 +346,7 @@ def extract_fcf(gaap):
     if cfo_ttm is None or capex_ttm is None:
         return None
 
-    return cfo_ttm - abs(capex_ttm)  # capex bývá záporný v CF, abs() pro jistotu
+    return cfo_ttm - abs(capex_ttm)
 
 
 def extract_net_debt(gaap):
@@ -307,14 +367,12 @@ def extract_fundamentals(data):
     facts = data.get("facts", {})
     gaap  = facts.get("us-gaap", {})
 
-    # Shares — prohledej i non-USD jednotky (PFE reportuje shares bez USD)
     shares = pick_latest_scalar_any_unit(gaap, [
         "CommonStockSharesOutstanding",
         "CommonStockSharesIssued",
         "EntityCommonStockSharesOutstanding",
     ])
 
-    # Revenue — pořadí kandidátů: nejnovější GAAP standard první
     revenue = pick_first_existing(gaap, [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
@@ -350,7 +408,7 @@ def extract_fundamentals(data):
     net_income_val = compute_ttm(net_income)
     net_income_ttm = net_income_val if net_income_val and abs(net_income_val) < 1e12 else None
 
-    result = {
+    return {
         "revenue":       revenue_ttm,
         "net_income":    net_income_ttm,
         "fcf":           extract_fcf(gaap),
@@ -366,5 +424,3 @@ def extract_fundamentals(data):
             "depreciation":     depreciation,
         }
     }
-
-    return result
