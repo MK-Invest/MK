@@ -77,18 +77,20 @@ def compute_metrics(data: dict) -> dict:
             q["market_cap"] = mc
             q["ev"] = ev
 
+            # Annualizuj quarterly hodnoty (*4) pro smysluplné násobky
+            # P/E z jednoho kvartálu bez annualizace = nesmysl (MSFT Q1 = 89× místo 23×)
             if eb not in (None, 0):
-                q["ev_ebitda"] = ev / eb
+                q["ev_ebitda"] = ev / (eb * 4)
 
             if ni not in (None, 0):
                 q["eps"] = ni / shares if shares else None
-                q["pe"] = mc / ni if ni else None
+                q["pe"] = mc / (ni * 4)
 
             if rev not in (None, 0):
-                q["ps"] = mc / rev
+                q["ps"] = mc / (rev * 4)
 
             if equity not in (None, 0):
-                q["pb"] = mc / equity
+                q["pb"] = mc / equity  # equity je stock, ne flow → bez *4
 
         quarters.append(q)
 
