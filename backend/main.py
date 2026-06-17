@@ -529,55 +529,58 @@ async def valuation(ticker: str, body: ValuationRequest):
     revenue = d.get("revenue") or 0
     net_debt = d.get("net_debt") or 0
 
-    # ── Odvozené vstupy z reálných dat ──────────────────────────────
-    ebitda       = d.get("ebitda")
-    net_income   = d.get("net_income")
+    # ── Odvoď vstupy z reálných dat ─────────────────────────────────
+    ebitda     = d.get("ebitda")
+    net_income = d.get("net_income")
 
-    # EBITDA margin: preferuj sec_margin (yfinance), jinak spočítej z EBITDA/revenue
-    if sec_margin:
+    # EBITDA margin z dat, ne hard-coded default
+    if sec_margin and sec_margin > 0:
         derived_margin = sec_margin
     elif ebitda and revenue:
         derived_margin = ebitda / revenue
     elif net_income and revenue:
-        # hrubý proxy: NI margin jako dolní odhad (konzervativní)
-        derived_margin = (net_income / revenue) * 1.4   # typicky EBITDA ≈ 1.4× NI margin
+        derived_margin = (net_income / revenue) * 1.4
     else:
-        derived_margin = 0.20   # hard fallback pouze pokud vůbec nejsou data
+        derived_margin = 0.20
 
-    # EV/EBITDA multiple: odvoď z TTM metrik nebo sektoru
-    # Výchozí: konzervativních 20× (blíž realitě než 15× pro large-cap growth)
-    derived_multiple = base_override.get("ev_ebitda_multiple")
-    if not derived_multiple:
-        ttm_metrics = compute_metrics({**d, "history": d.get("_history") or d.get("history") or {}})
-        ttm_ev_ebitda = (ttm_metrics.get("ttm") or {}).get("ev_ebitda")
-        if ttm_ev_ebitda and 5 < ttm_ev_ebitda < 60:
-            # Použij TTM EV/EBITDA jako výchozí multiple (trh dává signal)
-            derived_multiple = round(ttm_ev_ebitda, 1)
-        else:
-            derived_multiple = 20.0
+    # EV/EBITDA multiple z TTM metrik
+    ttm_for_multiple = compute_metrics({**d, "history": d.get("_history") or d.get("history") or {}})
+    ttm_ev_ebitda = (ttm_for_multiple.get("ttm") or {}).get("ev_ebitda")
+    if ttm_ev_ebitda and 5 < ttm_ev_ebitda < 80:
+        derived_multiple = round(ttm_ev_ebitda, 1)
+    else:
+        derived_multiple = 20.0
 
-    # Revenue growth: historický CAGR z posledních dostupných kvartálů
-    derived_growth = base_override.get("revenue_cagr") or d.get("revenue_growth")
+    # Revenue growth z historických dat — 3-letý CAGR (12 kvartálů)
+    # YoY je příliš volatilní, 3Y CAGR lépe vystihuje strukturální trend
+    rev_hist_raw = (d.get("_history") or d.get("history") or {}).get("revenue") or []
+    derived_growth = d.get("revenue_growth")
     if not derived_growth:
-        rev_hist = (d.get("_history") or d.get("history") or {}).get("revenue") or []
-        if len(rev_hist) >= 5:
-            newest = rev_hist[0].get("val")
-            oldest = rev_hist[4].get("val")   # 4 kvartály zpět ≈ 1 rok
-            if newest and oldest and oldest > 0:
-                derived_growth = (newest / oldest) - 1   # YoY growth
-        if not derived_growth:
-            derived_growth = 0.05   # fallback 5 %
+        if len(rev_hist_raw) >= 13:
+            # 3-letý CAGR: nejnovější vs stejný kvartál před 3 lety
+            newest_val = rev_hist_raw[0].get("val")
+            oldest_val = rev_hist_raw[12].get("val")
+            if newest_val and oldest_val and oldest_val > 0:
+                derived_growth = (newest_val / oldest_val) ** (1/3) - 1
+        elif len(rev_hist_raw) >= 5:
+            # 1-letý CAGR jako fallback
+            newest_val = rev_hist_raw[0].get("val")
+            oldest_val = rev_hist_raw[4].get("val")
+            if newest_val and oldest_val and oldest_val > 0:
+                derived_growth = (newest_val / oldest_val) - 1
+    if not derived_growth:
+        derived_growth = 0.05
 
     input_data = {
         "revenue":           revenue,
         "ebitda_margin":     base_override.get("ebitda_margin") or derived_margin,
-        "ev_ebitda_multiple": derived_multiple,
+        "ev_ebitda_multiple": base_override.get("ev_ebitda_multiple") or derived_multiple,
         "net_debt":          net_debt,
         "shares":            shares,
         "fcf":               fcf,
         "nopat":             d.get("nopat"),
         "roic":              d.get("roic"),
-        "revenue_growth":    derived_growth,
+        "revenue_growth":    base_override.get("revenue_cagr") or derived_growth,
         "tax_rate":          d.get("tax_rate"),
         "fcf_margin":        (fcf / revenue) if (revenue and fcf is not None) else None,
     }
@@ -599,7 +602,11 @@ async def valuation(ticker: str, body: ValuationRequest):
     for name, sc in raw.items():
         intrinsic = sc.get("price")
         upside = (intrinsic / price - 1) if intrinsic is not None and price else None
-        required_cagr = ((sc.get("exit_price_per_share") or 0) / price) ** (1 / body.years) - 1 if price and body.years else None
+        exit_px = sc.get("exit_price_per_share") or 0
+        if price and body.years and exit_px > 0:
+            required_cagr = (exit_px / price) ** (1 / body.years) - 1
+        else:
+            required_cagr = None
         scenarios[name] = {
             **sc,
             "intrinsic_value": intrinsic,

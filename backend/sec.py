@@ -348,10 +348,15 @@ def compute_ttm(series, annual_series=None):
 
 
 def extract_fcf(gaap):
-    cfo   = pick_first_existing(gaap, ["NetCashProvidedByOperatingActivities"])
+    cfo = pick_first_existing(gaap, [
+        "NetCashProvidedByOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivities",
+    ])
     capex = pick_first_existing(gaap, [
         "CapitalExpenditures",
         "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PurchaseOfPropertyPlantAndEquipmentNet",
+        "PaymentsToAcquireProductiveAssets",
     ])
 
     cfo_ttm   = compute_ttm(cfo)
