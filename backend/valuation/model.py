@@ -80,7 +80,7 @@ def model_dcf(
     net_debt: float,
     shares: float,
     wacc: float       = 0.10,
-    fcf_growth: float = 0.06,
+    fcf_growth=fcf_growth_base,
     terminal_growth: float = 0.025,
     years: int        = 5,
 ) -> dict:
@@ -236,24 +236,42 @@ def model_roic_ep(
 # COMPOSITE — vážený průměr dostupných modelů
 # =========================================================
 
+# Pevné váhy modelů v composite — EV/EBITDA je tržně ukotvený
+# a spolehlivější než DCF pro short horizon nebo FCF Yield pro growth firmy
+MODEL_WEIGHTS = {
+    "ev_ebitda":  0.50,   # tržní multiple = nejspolehlivější kotva
+    "dcf":        0.30,   # teoretická hodnota, dlouhý horizont
+    "fcf_yield":  0.20,   # doplňkový pohled
+    "roic_ep":    0.40,   # silný model ale vzácně dostupný
+}
+
 def composite_price(models: list[dict]) -> dict:
     """
-    Vážený průměr price targetů všech modelů podle jejich confidence.
-    Modely bez price nebo s confidence = 0 jsou ignorovány.
+    Vážený průměr price targetů — pevné váhy podle spolehlivosti modelu,
+    ne jen confidence score. EV/EBITDA dostává nejvyšší váhu protože
+    vychází z reálného tržního multiple a je nejméně citlivý na
+    předpoklady (na rozdíl od DCF s terminální hodnotou).
     """
     valid = [m for m in models if m.get("price") is not None and m.get("confidence", 0) > 0]
     if not valid:
         return {"price": None, "confidence": 0.0, "models_used": []}
 
-    total_w  = sum(m["confidence"] for m in valid)
-    w_price  = sum(m["price"] * m["confidence"] for m in valid) / total_w
-    avg_conf = total_w / len(valid)   # průměrná confidence (normalizovaná)
+    # Přiřaď váhy podle modelu, normalizuj na součet 1
+    raw_weights = {m["model"]: MODEL_WEIGHTS.get(m["model"], 0.3) for m in valid}
+    total_w = sum(raw_weights.values())
+    norm_weights = {k: v / total_w for k, v in raw_weights.items()}
+
+    w_price = sum(
+        m["price"] * norm_weights[m["model"]]
+        for m in valid
+    )
+    avg_conf = sum(m["confidence"] for m in valid) / len(valid)
 
     return {
         "price":       _safe(w_price),
         "confidence":  min(avg_conf, 1.0),
         "models_used": [m["model"] for m in valid],
-        "weights":     {m["model"]: round(m["confidence"] / total_w, 3) for m in valid},
+        "weights":     {k: round(v, 3) for k, v in norm_weights.items()},
     }
 
 
@@ -325,13 +343,11 @@ def run_scenarios(
 
     fcf = _safe(input_data.get("fcf"))
 
-    # FCF margin fallback: pouze pokud máme explicitní fcf_margin z UI/data
-    # NIKDY neodhad z revenue bez reálných dat — to způsobuje nesmyslné DCF targety
+    # FCF fallback pouze z explicitního fcf_margin — nikdy z revenue*konstanta
     if fcf is None:
-        fcf_margin = _safe(input_data.get("fcf_margin"))
-        if fcf_margin is not None and revenue > 0:
-            fcf = revenue * fcf_margin
-        # jinak fcf zůstane None → DCF a FCF Yield modely se prostě nespustí
+        fcf_margin_input = _safe(input_data.get("fcf_margin"))
+        if fcf_margin_input and fcf_margin_input > 0 and revenue > 0:
+            fcf = revenue * fcf_margin_input
 
     nopat = _safe(input_data.get("nopat"))
     roic = _safe(input_data.get("roic"))
@@ -343,15 +359,23 @@ def run_scenarios(
         override = scenario_overrides.get(scenario) or {}
         models_out = {}
 
-        adj_growth = float(override.get("revenue_cagr", revenue_growth + sp["revenue_growth_adj"]))
-        adj_margin = float(override.get("ebitda_margin", ebitda_margin + sp["ebitda_margin_adj"]))
-        adj_margin = max(adj_margin, 0.01)
-        adj_multiple = float(override.get("ev_ebitda_multiple", ev_ebitda_multiple * (1 + sp["ev_ebitda_adj"])))
+        # Override hodnoty: 0 nebo None znamená "nebylo nastaveno" → použij scénářový default
+        # Uživatel musí zadat > 0 aby override platil
+        def _override(key, default):
+            v = override.get(key)
+            if v is None or v == 0:
+                return default
+            return float(v)
+
+        adj_growth   = _override("revenue_cagr",      revenue_growth + sp["revenue_growth_adj"])
+        adj_margin   = _override("ebitda_margin",      ebitda_margin  + sp["ebitda_margin_adj"])
+        adj_margin   = max(adj_margin, 0.01)
+        adj_multiple = _override("ev_ebitda_multiple", ev_ebitda_multiple * (1 + sp["ev_ebitda_adj"]))
         adj_multiple = max(adj_multiple, 1.0)
 
         scenario_fcf = fcf
         fcf_margin = _safe(override.get("fcf_margin"))
-        if fcf_margin is not None and revenue > 0:
+        if fcf_margin and fcf_margin > 0 and revenue > 0:
             scenario_fcf = revenue * ((1 + adj_growth) ** years) * fcf_margin
 
         models_out["ev_ebitda"] = model_ev_ebitda(
@@ -366,14 +390,24 @@ def run_scenarios(
 
         if scenario_fcf is not None and scenario_fcf > 0:
             adj_wacc = max(wacc + sp["wacc_adj"], 0.04)
+            # DCF vždy na 10 let — s kratším horizontem dramaticky podhodnocuje growth firmy
+            # "years" parametr se použije jen pro EV/EBITDA revenue projekci
+            dcf_years = max(years, 10)
             models_out["dcf"] = model_dcf(
                 fcf=scenario_fcf,
                 net_debt=net_debt,
                 shares=shares,
                 wacc=adj_wacc,
-                fcf_growth=sp["fcf_growth"] if sp["fcf_growth"] is not None else adj_growth,
-                terminal_growth=0.03,
-                years=years,
+
+                revenue_cagr_5y    = _safe(input_data.get("revenue_cagr_5y"))
+                net_income_cagr_5y = _safe(input_data.get("net_income_cagr_5y"))
+
+                candidates = [x for x in [revenue_cagr_5y, net_income_cagr_5y] if x is not None]
+                fcf_growth_base = min(*candidates, 0.15) if candidates else adj_growth
+
+                
+                terminal_growth=0.025,
+                years=dcf_years,
             )
             adj_yield = max(0.04 + sp["target_yield_adj"], 0.01)
             models_out["fcf_yield"] = model_fcf_yield(

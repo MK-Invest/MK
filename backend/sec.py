@@ -381,6 +381,42 @@ def extract_eps_quarterly(gaap, shares):
         return []
     return [{"end": q["end"], "eps": q["val"] / shares} for q in ni[:4] if q.get("val")]
 
+def compute_cagr_5y(series: list[dict]) -> float | None:
+    """
+    Spočítá 5Y CAGR z quarterly série (DESC pořadí, nejnovější první).
+    Hledá hodnotu před ~5 lety (20 kvartálů zpět).
+    Vrátí None pokud nemáme dostatek dat.
+    """
+    if not series or len(series) < 8:
+        return None
+
+    newest = series[0].get("val")
+    if not newest or newest <= 0:
+        return None
+
+    # Vezmi hodnotu co nejblíže 20 kvartálům zpět (5 let)
+    target_idx = min(19, len(series) - 1)
+    oldest = series[target_idx].get("val")
+    if not oldest or oldest <= 0:
+        return None
+
+    # Počet let podle skutečného datového rozpětí
+    try:
+        date_new = datetime.date.fromisoformat(series[0]["end"])
+        date_old = datetime.date.fromisoformat(series[target_idx]["end"])
+        years = (date_new - date_old).days / 365.25
+        if years < 1:
+            return None
+    except Exception:
+        years = target_idx / 4  # fallback: počet kvartálů / 4
+
+    cagr = (newest / oldest) ** (1 / years) - 1
+
+    # Sanitace — CAGR mimo -50% až +100% je podezřelý
+    if not (-0.50 <= cagr <= 1.00):
+        return None
+
+    return cagr
 
 def extract_fundamentals(data):
     facts = data.get("facts", {})
@@ -415,6 +451,10 @@ def extract_fundamentals(data):
     ])
     op_income = sorted(op_income, key=lambda x: x["end"], reverse=True)
 
+    # Po řádku kde sestavuješ revenue, net_income série:
+    revenue_cagr_5y    = compute_cagr_5y(revenue)
+    net_income_cagr_5y = compute_cagr_5y(net_income)
+
     depreciation = pick_first_existing(gaap, [
         "DepreciationAndAmortization",
         "DepreciationDepletionAndAmortization",
@@ -434,6 +474,8 @@ def extract_fundamentals(data):
         "net_debt":      extract_net_debt(gaap),
         "eps_quarterly": extract_eps_quarterly(gaap, shares),
         "shares":        shares,
+        "revenue_cagr_5y":    revenue_cagr_5y,      # ← nové
+        "net_income_cagr_5y": net_income_cagr_5y,   # ← nové
         "source":        "sec",
         "confidence":    0.85,
         "history": {
