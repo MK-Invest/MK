@@ -392,7 +392,7 @@ def run_scenarios(
     Všechny vstupy jsou dostupné z main.py /valuation endpointu.
     Jediný nový vstup který musíš přidat do input_data v main.py: "cfo"
     """
-    # ── Základní vstupy (všechny dostupné v main.py) ─────────────────
+    # ── Základní vstupy ──────────────────────────────────────────────
     revenue            = float(input_data.get("revenue") or 0)
     ebitda_margin      = float(input_data.get("ebitda_margin") or 0.20)
     ev_ebitda_multiple = float(input_data.get("ev_ebitda_multiple") or 15.0)
@@ -405,7 +405,7 @@ def run_scenarios(
     revenue_growth = float(input_data.get("revenue_growth") or 0.05)
     nopat          = _safe(input_data.get("nopat"))
     roic           = _safe(input_data.get("roic"))
-    cfo            = _safe(input_data.get("cfo"))   # nový vstup z sec.extract_cfo
+    cfo            = _safe(input_data.get("cfo"))
 
     # ── FCF vstup ────────────────────────────────────────────────────
     fcf = _safe(input_data.get("fcf"))
@@ -415,10 +415,16 @@ def run_scenarios(
             fcf = revenue * fcf_margin_input
 
     # ── FCF growth: min(revenue_cagr_5y, net_income_cagr_5y, 0.15) ──
+    # Pouze pozitivní CAGR — záporný growth v DCF dává nereálné výsledky
+    # pro stabilní firmy (PFE po Paxlovid propadu, cyklické firmy atd.)
     revenue_cagr_5y    = _safe(input_data.get("revenue_cagr_5y"))
     net_income_cagr_5y = _safe(input_data.get("net_income_cagr_5y"))
-    candidates         = [x for x in [revenue_cagr_5y, net_income_cagr_5y] if x is not None and x > 0]
-    fcf_growth_base    = min(*candidates, 0.15) if candidates else min(revenue_growth, 0.15)
+    candidates         = [
+        x for x in [revenue_cagr_5y, net_income_cagr_5y]
+        if x is not None and x > 0
+    ]
+    # Fallback 3 % = konzervativní dlouhodobý růst (GDP-like)
+    fcf_growth_base    = min(*candidates, 0.15) if candidates else 0.03
 
     # ── Detekce typu firmy + kalibrace ───────────────────────────────
     firm_type = detect_firm_type(revenue, ebitda_margin, revenue_growth)
@@ -485,8 +491,8 @@ def run_scenarios(
         if fcf_margin and fcf_margin > 0 and revenue > 0:
             scenario_fcf = revenue * ((1 + adj_growth) ** years) * fcf_margin
 
-        # FCF growth: konzervativní base ± scénářový adj, strop 0.15
-        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, -0.10), 0.15)
+        # FCF growth: floor 0.0 — záporný growth dává nereálné DCF výsledky
+        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, 0.0), 0.15)
 
         # ── MODEL 1: EV/EBITDA ───────────────────────────────────────
         models_out["ev_ebitda"] = model_ev_ebitda(
