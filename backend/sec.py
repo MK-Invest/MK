@@ -367,6 +367,12 @@ def extract_fcf(gaap):
 
     return cfo_ttm - abs(capex_ttm)
 
+def extract_cfo(gaap) -> Optional[float]:
+    cfo = pick_first_existing(gaap, [
+        "NetCashProvidedByOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivities",
+    ])
+    return compute_ttm(cfo)
 
 def extract_net_debt(gaap):
     lt   = pick_latest_scalar(gaap, ["LongTermDebt"]) or 0
@@ -474,6 +480,7 @@ def extract_fundamentals(data):
         "net_debt":      extract_net_debt(gaap),
         "eps_quarterly": extract_eps_quarterly(gaap, shares),
         "shares":        shares,
+        "cfo": extract_cfo(gaap),
         "revenue_cagr_5y":    revenue_cagr_5y,      # ← nové
         "net_income_cagr_5y": net_income_cagr_5y,   # ← nové
         "source":        "sec",

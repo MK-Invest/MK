@@ -580,6 +580,7 @@ async def valuation(ticker: str, body: ValuationRequest):
         "fcf":               fcf,
         "nopat":             d.get("nopat"),
         "roic":              d.get("roic"),
+        "cfo": d.get("cfo"),
         "revenue_growth":    base_override.get("revenue_cagr") or derived_growth,
         "revenue_cagr_5y":    d.get("revenue_cagr_5y"),
         "net_income_cagr_5y": d.get("net_income_cagr_5y"),

@@ -11,6 +11,27 @@ Dostupné modely (podle dat ze SEC pipeline):
 
 Každý model vrací price target + confidence (0–1).
 run_scenarios() vrací bear / base / bull přes všechny modely najednou.
+
+Kalibrace podle typu firmy (auto-detekce z input_data):
+  - mega_tech:   EBITDA margin > 30 % + revenue > 50B + growth > 8 %
+  - growth_saas: revenue growth > 15 % (menší firma)
+  - default:     vše ostatní
+
+Vstupy input_data (všechny dostupné z main.py /valuation pipeline):
+  revenue            float  TTM revenue [USD]             — sec / fmp
+  ebitda_margin      float  TTM EBITDA / revenue          — odvozeno v main.py
+  ev_ebitda_multiple float  TTM EV/EBITDA                 — compute_metrics TTM
+  net_debt           float  dlouhodobý dluh - cash        — sec.extract_net_debt
+  shares             float  počet akcií                   — sec
+  fcf                float  TTM FCF (CFO - CapEx)         — sec.extract_fcf
+  fcf_margin         float  fcf / revenue                 — odvozeno v main.py
+  nopat              float  NOPAT (volitelné)             — compute_metrics
+  roic               float  ROIC (volitelné)              — compute_metrics
+  revenue_growth     float  3Y CAGR z history             — odvozeno v main.py
+  revenue_cagr_5y    float  5Y CAGR z history.revenue    — sec.compute_cagr_5y
+  net_income_cagr_5y float  5Y CAGR z history.net_income — sec.compute_cagr_5y
+  tax_rate           float  efektivní daňová sazba        — compute_metrics
+  cfo                float  TTM Cash From Operations      — sec.extract_cfo (nové)
 """
 
 from __future__ import annotations
@@ -35,6 +56,92 @@ def _pct(label: str, v: Optional[float]) -> str:
 
 
 # =========================================================
+# DETEKCE TYPU FIRMY
+# =========================================================
+
+FIRM_PROFILES = {
+    "mega_tech": {
+        # Kalibrace: Apple, Microsoft, Google, Meta
+        "ev_ebitda_bear_adj":  -0.15,   # -15 % multiple komprese
+        "ev_ebitda_bull_adj":  +0.20,
+        "ev_ebitda_floor":      16.0,   # nikdy pod 16x i v bear
+        "fcf_yield_base":       0.025,  # P/FCF ~40x historické ocenění
+        "fcf_yield_bear":       0.035,  # P/FCF ~29x komprese sentimentu
+        "fcf_yield_bull":       0.018,  # P/FCF ~56x boom ocenění
+        "wacc_base":            0.09,   # nižší riziko
+        "wacc_bear_adj":       +0.015,
+        "wacc_bull_adj":       -0.010,
+        "dcf_fcf_multiplier":   0.65,   # CFO x 0.65 = normalizovaný FCF (odstraní growth CapEx)
+        "revenue_bear_adj":    -0.04,
+        "revenue_bull_adj":    +0.04,
+        "margin_bear_adj":     -0.02,
+        "margin_bull_adj":     +0.02,
+        "label":               "Mega-cap Tech",
+    },
+    "growth_saas": {
+        # Kalibrace: Snowflake, Datadog, Cloudflare, HubSpot
+        "ev_ebitda_bear_adj":  -0.25,   # vyšší volatilita ocenění
+        "ev_ebitda_bull_adj":  +0.35,
+        "ev_ebitda_floor":      10.0,
+        "fcf_yield_base":       0.035,  # P/FCF ~29x
+        "fcf_yield_bear":       0.055,  # P/FCF ~18x výrazná komprese
+        "fcf_yield_bull":       0.022,  # P/FCF ~45x
+        "wacc_base":            0.11,   # vyšší riziko
+        "wacc_bear_adj":       +0.030,
+        "wacc_bull_adj":       -0.015,
+        "dcf_fcf_multiplier":   1.0,    # FCF přímo bez normalizace
+        "revenue_bear_adj":    -0.06,
+        "revenue_bull_adj":    +0.07,
+        "margin_bear_adj":     -0.04,
+        "margin_bull_adj":     +0.04,
+        "label":               "Growth SaaS/Tech",
+    },
+    "default": {
+        # Kalibrace: průměrná S&P 500 firma
+        "ev_ebitda_bear_adj":  -0.20,
+        "ev_ebitda_bull_adj":  +0.20,
+        "ev_ebitda_floor":      6.0,
+        "fcf_yield_base":       0.040,  # P/FCF ~25x
+        "fcf_yield_bear":       0.055,
+        "fcf_yield_bull":       0.028,
+        "wacc_base":            0.10,
+        "wacc_bear_adj":       +0.020,
+        "wacc_bull_adj":       -0.010,
+        "dcf_fcf_multiplier":   1.0,
+        "revenue_bear_adj":    -0.05,
+        "revenue_bull_adj":    +0.05,
+        "margin_bear_adj":     -0.03,
+        "margin_bull_adj":     +0.03,
+        "label":               "Default",
+    },
+}
+
+
+def detect_firm_type(
+    revenue: float,
+    ebitda_margin: float,
+    revenue_growth: float,
+) -> str:
+    """
+    Auto-detekce typu firmy z fundamentálních dat.
+
+    mega_tech:   revenue > 50B + EBITDA margin > 30 % + growth > 8 %
+    growth_saas: growth > 15 % (bez ohledu na velikost)
+    default:     vše ostatní
+    """
+    is_large       = revenue > 50_000_000_000
+    is_profitable  = ebitda_margin > 0.30
+    is_growing     = revenue_growth > 0.08
+    is_fast_growth = revenue_growth > 0.15
+
+    if is_large and is_profitable and is_growing:
+        return "mega_tech"
+    if is_fast_growth:
+        return "growth_saas"
+    return "default"
+
+
+# =========================================================
 # MODEL 1 — EV / EBITDA  (relativní ocenění)
 # =========================================================
 
@@ -45,21 +152,25 @@ def model_ev_ebitda(
     net_debt: float,
     shares: float,
     revenue_growth: float = 0.0,
-    years: int = 1,
+    years: int = 3,
 ) -> dict:
     """
-    Klasický EV/EBITDA model s volitelným forward revenue growth.
+    Forward EV/EBITDA model.
+    price = (EBITDA_forward x multiple - net_debt) / shares
 
-    price = (EBITDA_forward × multiple − net_debt) / shares
+    Odpovídá na otázku: "Za kolik trh ocení firmu za N let při tomto růstu?"
     """
+    if not shares or shares <= 0:
+        return {"model": "ev_ebitda", "price": None, "confidence": 0.0}
+
     rev_forward = revenue * ((1 + revenue_growth) ** years)
     ebitda      = _safe(rev_forward * ebitda_margin)
-    if ebitda is None:
+    if ebitda is None or ebitda <= 0:
         return {"model": "ev_ebitda", "price": None, "confidence": 0.0}
 
     ev     = ebitda * ev_ebitda_multiple
     equity = ev - net_debt
-    price  = _safe(equity / shares) if shares else None
+    price  = _safe(equity / shares)
 
     return {
         "model":      "ev_ebitda",
@@ -79,21 +190,22 @@ def model_dcf(
     fcf: float,
     net_debt: float,
     shares: float,
-    wacc: float             = 0.10,
-    fcf_growth: float       = 0.06,
-    terminal_growth: float  = 0.025,
-    years: int              = 10,
+    wacc: float            = 0.10,
+    fcf_growth: float      = 0.06,
+    terminal_growth: float = 0.025,
+    years: int             = 10,
 ) -> dict:
     """
     Dvoustupňový DCF:
       Fáze 1: explicitní FCF projekce na `years` let
       Fáze 2: Gordonův model terminální hodnoty
 
-    fcf_growth je odvozený jako min(revenue_cagr_5y, net_income_cagr_5y, 0.15)
-    v run_scenarios() před voláním tohoto modelu.
-
-    Omezení: fcf_growth max 35 %, terminal_growth < wacc (jinak model diverguje).
+    fcf_growth = min(revenue_cagr_5y, net_income_cagr_5y, 0.15)
+    Pro mega_tech: fcf = cfo x 0.65 (normalizace growth CapEx)
     """
+    if not shares or shares <= 0 or fcf <= 0:
+        return {"model": "dcf", "price": None, "confidence": 0.0}
+
     fcf_g  = min(abs(fcf_growth), 0.35) * (1 if fcf_growth >= 0 else -1)
     t_grow = min(terminal_growth, wacc - 0.005)
 
@@ -103,16 +215,14 @@ def model_dcf(
         cf      *= (1 + fcf_g)
         pv_fcfs += cf / ((1 + wacc) ** t)
 
-    # Terminální hodnota (Gordonův model)
     terminal_fcf = cf * (1 + t_grow)
     terminal_val = terminal_fcf / (wacc - t_grow)
     pv_terminal  = terminal_val / ((1 + wacc) ** years)
 
     intrinsic_ev = pv_fcfs + pv_terminal
     equity_value = intrinsic_ev - net_debt
-    price        = _safe(equity_value / shares) if shares else None
-
-    base_conf = 0.80 if fcf > 0 else 0.35
+    price        = _safe(equity_value / shares)
+    base_conf    = 0.80 if fcf > 0 else 0.35
 
     return {
         "model":           "dcf",
@@ -143,16 +253,19 @@ def model_fcf_yield(
     """
     Obrácený FCF yield:
       fair market cap = FCF / target_yield
-      price = (fair_mc − net_debt) / shares
+      price = (fair_mc - net_debt) / shares
 
-    target_yield 4 % odpovídá přibližně P/FCF ≈ 25× (pro průměrnou firmu S&P 500).
+    target_yield podle typu firmy:
+      mega_tech:   2.5 % base (P/FCF ~40x)
+      growth_saas: 3.5 % base (P/FCF ~29x)
+      default:     4.0 % base (P/FCF ~25x)
     """
-    if target_yield <= 0:
+    if not shares or shares <= 0 or target_yield <= 0:
         return {"model": "fcf_yield", "price": None, "confidence": 0.0}
 
     fair_mc      = fcf / target_yield
     equity_value = fair_mc - net_debt
-    price        = _safe(equity_value / shares) if shares else None
+    price        = _safe(equity_value / shares)
     confidence   = 0.65 if fcf > 0 else 0.25
 
     return {
@@ -181,34 +294,33 @@ def model_roic_ep(
 ) -> dict:
     """
     Economic Profit (EP) model:
-      EP = NOPAT − (Invested Capital × WACC)
+      EP = NOPAT - (Invested Capital x WACC)
 
-    ROIC fade: každý rok se ROIC přibližuje k WACC o fade_rate × (ROIC − WACC).
+    ROIC fade: každý rok se ROIC přibližuje k WACC.
+    Vyžaduje nopat + roic z compute_metrics.
     """
-    if roic <= 0:
+    if not shares or shares <= 0 or roic <= 0 or not nopat:
         return {"model": "roic_ep", "price": None, "confidence": 0.0}
 
     invested_capital = nopat / roic
 
-    pv_ep     = 0.0
-    ic        = invested_capital
-    cur_roic  = roic
+    pv_ep    = 0.0
+    ic       = invested_capital
+    cur_roic = roic
 
     for t in range(1, years + 1):
-        ic       *= (1 + growth)
-        cur_nopat = ic * cur_roic
-        ep        = cur_nopat - ic * wacc
-        pv_ep    += ep / ((1 + wacc) ** t)
-
-        cur_roic -= fade_rate * (cur_roic - wacc)
-        cur_roic  = max(cur_roic, wacc)
+        ic        *= (1 + growth)
+        cur_nopat  = ic * cur_roic
+        ep         = cur_nopat - ic * wacc
+        pv_ep     += ep / ((1 + wacc) ** t)
+        cur_roic  -= fade_rate * (cur_roic - wacc)
+        cur_roic   = max(cur_roic, wacc)
 
     terminal_ep      = ic * cur_roic - ic * wacc
     pv_terminal      = (terminal_ep / (wacc - 0.02)) / ((1 + wacc) ** years)
-
     intrinsic_equity = invested_capital + pv_ep + pv_terminal
     equity_value     = intrinsic_equity - net_debt
-    price            = _safe(equity_value / shares) if shares else None
+    price            = _safe(equity_value / shares)
     confidence       = 0.70 if roic > wacc else 0.40
 
     return {
@@ -236,8 +348,9 @@ MODEL_WEIGHTS = {
 
 def composite_price(models: list[dict]) -> dict:
     """
-    Vážený průměr price targetů — pevné váhy podle spolehlivosti modelu.
-    EV/EBITDA dostává nejvyšší váhu — vychází z reálného tržního multiple.
+    Vážený průměr price targetů.
+    EV/EBITDA má nejvyšší váhu — vychází z reálného tržního multiple.
+    Váhy se normalizují podle dostupných modelů.
     """
     valid = [m for m in models if m.get("price") is not None and m.get("confidence", 0) > 0]
     if not valid:
@@ -246,9 +359,8 @@ def composite_price(models: list[dict]) -> dict:
     raw_weights  = {m["model"]: MODEL_WEIGHTS.get(m["model"], 0.3) for m in valid}
     total_w      = sum(raw_weights.values())
     norm_weights = {k: v / total_w for k, v in raw_weights.items()}
-
-    w_price  = sum(m["price"] * norm_weights[m["model"]] for m in valid)
-    avg_conf = sum(m["confidence"] for m in valid) / len(valid)
+    w_price      = sum(m["price"] * norm_weights[m["model"]] for m in valid)
+    avg_conf     = sum(m["confidence"] for m in valid) / len(valid)
 
     return {
         "price":       _safe(w_price),
@@ -259,60 +371,28 @@ def composite_price(models: list[dict]) -> dict:
 
 
 # =========================================================
-# SCÉNÁŘOVÉ PARAMETRY
-# =========================================================
-
-SCENARIO_PARAMS = {
-    "bear": {
-        "revenue_growth_adj": -0.05,
-        "ebitda_margin_adj":  -0.03,
-        "ev_ebitda_adj":      -0.20,
-        "wacc_adj":           +0.02,
-        "target_yield_adj":   +0.01,
-        "roic_growth_adj":    -0.02,
-        "label":              "Bear",
-    },
-    "base": {
-        "revenue_growth_adj":  0.0,
-        "ebitda_margin_adj":   0.0,
-        "ev_ebitda_adj":       0.0,
-        "wacc_adj":            0.0,
-        "target_yield_adj":    0.0,
-        "roic_growth_adj":     0.0,
-        "label":               "Base",
-    },
-    "bull": {
-        "revenue_growth_adj": +0.05,
-        "ebitda_margin_adj":  +0.03,
-        "ev_ebitda_adj":      +0.20,
-        "wacc_adj":           -0.01,
-        "target_yield_adj":   -0.01,
-        "roic_growth_adj":    +0.03,
-        "label":              "Bull",
-    },
-}
-
-
-# =========================================================
 # RUN SCENARIOS  (hlavní entry point)
 # =========================================================
 
 def run_scenarios(
     input_data: dict,
     wacc: float = 0.10,
-    years: int = 5,
+    years: int = 3,
     scenario_overrides: dict | None = None,
 ) -> dict:
     """
     Runs bear/base/bull valuation scenarios across available models.
 
-    `scenario_overrides` může obsahovat per-scénář hodnoty z UI:
-      revenue_cagr, ebitda_margin, ev_ebitda_multiple, fcf_margin
+    Auto-detekuje typ firmy a kalibruje:
+      - EV/EBITDA floor + adjustmenty
+      - FCF yield target podle profilu
+      - WACC podle rizika firmy
+      - DCF FCF normalizaci (mega_tech: cfo x 0.65)
 
-    FCF growth pro DCF se odvozuje jako:
-      min(revenue_cagr_5y, net_income_cagr_5y, 0.15)
-    kde obě CAGR hodnoty přichází z SEC pipeline (backend/sec.py).
+    Všechny vstupy jsou dostupné z main.py /valuation endpointu.
+    Jediný nový vstup který musíš přidat do input_data v main.py: "cfo"
     """
+    # ── Základní vstupy (všechny dostupné v main.py) ─────────────────
     revenue            = float(input_data.get("revenue") or 0)
     ebitda_margin      = float(input_data.get("ebitda_margin") or 0.20)
     ev_ebitda_multiple = float(input_data.get("ev_ebitda_multiple") or 15.0)
@@ -323,28 +403,41 @@ def run_scenarios(
 
     shares         = float(shares_raw)
     revenue_growth = float(input_data.get("revenue_growth") or 0.05)
+    nopat          = _safe(input_data.get("nopat"))
+    roic           = _safe(input_data.get("roic"))
+    cfo            = _safe(input_data.get("cfo"))   # nový vstup z sec.extract_cfo
 
+    # ── FCF vstup ────────────────────────────────────────────────────
     fcf = _safe(input_data.get("fcf"))
     if fcf is None:
         fcf_margin_input = _safe(input_data.get("fcf_margin"))
         if fcf_margin_input and fcf_margin_input > 0 and revenue > 0:
             fcf = revenue * fcf_margin_input
 
-    nopat = _safe(input_data.get("nopat"))
-    roic  = _safe(input_data.get("roic"))
-
-    # ── FCF growth: konzervativní minimum z 5Y CAGR ──────────────────
+    # ── FCF growth: min(revenue_cagr_5y, net_income_cagr_5y, 0.15) ──
     revenue_cagr_5y    = _safe(input_data.get("revenue_cagr_5y"))
     net_income_cagr_5y = _safe(input_data.get("net_income_cagr_5y"))
-    candidates         = [x for x in [revenue_cagr_5y, net_income_cagr_5y] if x is not None]
-    fcf_growth_base    = min(*candidates, 0.15) if candidates else revenue_growth
+    candidates         = [x for x in [revenue_cagr_5y, net_income_cagr_5y] if x is not None and x > 0]
+    fcf_growth_base    = min(*candidates, 0.15) if candidates else min(revenue_growth, 0.15)
+
+    # ── Detekce typu firmy + kalibrace ───────────────────────────────
+    firm_type = detect_firm_type(revenue, ebitda_margin, revenue_growth)
+    profile   = FIRM_PROFILES[firm_type]
+
+    # DCF FCF: normalizovaný pro mega_tech, přímý pro ostatní
+    multiplier     = profile["dcf_fcf_multiplier"]
+    normalized_fcf = None
+    if firm_type == "mega_tech" and cfo is not None and cfo > 0:
+        normalized_fcf = cfo * multiplier   # CFO x 0.65
+    elif fcf is not None and fcf > 0:
+        normalized_fcf = fcf
 
     scenario_overrides = scenario_overrides or {}
     result = {}
 
-    for scenario, sp in SCENARIO_PARAMS.items():
-        override    = scenario_overrides.get(scenario) or {}
-        models_out  = {}
+    for scenario in ("bear", "base", "bull"):
+        override   = scenario_overrides.get(scenario) or {}
+        models_out = {}
 
         def _override(key, default):
             v = override.get(key)
@@ -352,18 +445,50 @@ def run_scenarios(
                 return default
             return float(v)
 
-        adj_growth   = _override("revenue_cagr",      revenue_growth + sp["revenue_growth_adj"])
-        adj_margin   = _override("ebitda_margin",      ebitda_margin  + sp["ebitda_margin_adj"])
-        adj_margin   = max(adj_margin, 0.01)
-        adj_multiple = _override("ev_ebitda_multiple", ev_ebitda_multiple * (1 + sp["ev_ebitda_adj"]))
-        adj_multiple = max(adj_multiple, 1.0)
+        # ── Scénářové adjustmenty z profilu ──────────────────────────
+        if scenario == "bear":
+            rev_adj        = profile["revenue_bear_adj"]
+            margin_adj     = profile["margin_bear_adj"]
+            multiple_adj   = profile["ev_ebitda_bear_adj"]
+            wacc_adj       = profile["wacc_bear_adj"]
+            yield_target   = profile["fcf_yield_bear"]
+            fcf_growth_adj = -0.03
+        elif scenario == "bull":
+            rev_adj        = profile["revenue_bull_adj"]
+            margin_adj     = profile["margin_bull_adj"]
+            multiple_adj   = profile["ev_ebitda_bull_adj"]
+            wacc_adj       = profile["wacc_bull_adj"]
+            yield_target   = profile["fcf_yield_bull"]
+            fcf_growth_adj = +0.02
+        else:  # base
+            rev_adj        = 0.0
+            margin_adj     = 0.0
+            multiple_adj   = 0.0
+            wacc_adj       = 0.0
+            yield_target   = profile["fcf_yield_base"]
+            fcf_growth_adj = 0.0
 
-        scenario_fcf = fcf
+        adj_growth   = _override("revenue_cagr",      revenue_growth + rev_adj)
+        adj_margin   = _override("ebitda_margin",      ebitda_margin  + margin_adj)
+        adj_margin   = max(adj_margin, 0.01)
+
+        # EV/EBITDA multiple s floor podle profilu
+        raw_multiple = ev_ebitda_multiple * (1 + multiple_adj)
+        adj_multiple = _override("ev_ebitda_multiple", max(raw_multiple, profile["ev_ebitda_floor"]))
+
+        adj_wacc  = max(profile["wacc_base"] + wacc_adj, 0.04)
+        dcf_years = max(years, 10)
+
+        # FCF pro tento scénář (override z UI nebo normalizovaný)
+        scenario_fcf = normalized_fcf
         fcf_margin   = _safe(override.get("fcf_margin"))
         if fcf_margin and fcf_margin > 0 and revenue > 0:
             scenario_fcf = revenue * ((1 + adj_growth) ** years) * fcf_margin
 
-        # MODEL 1 — EV/EBITDA
+        # FCF growth: konzervativní base ± scénářový adj, strop 0.15
+        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, -0.10), 0.15)
+
+        # ── MODEL 1: EV/EBITDA ───────────────────────────────────────
         models_out["ev_ebitda"] = model_ev_ebitda(
             revenue=revenue,
             ebitda_margin=adj_margin,
@@ -374,18 +499,8 @@ def run_scenarios(
             years=years,
         )
 
-        # MODEL 2 + 3 — DCF + FCF Yield (pouze pokud máme FCF)
+        # ── MODEL 2 + 3: DCF + FCF Yield ────────────────────────────
         if scenario_fcf is not None and scenario_fcf > 0:
-            adj_wacc  = max(wacc + sp["wacc_adj"], 0.04)
-            dcf_years = max(years, 10)
-
-            # Scénářový adj_growth posune fcf_growth_base nahoru/dolů
-            # ale stále drží konzervativní strop 0.15
-            scenario_fcf_growth = min(
-                fcf_growth_base + sp["revenue_growth_adj"],
-                0.15,
-            )
-
             models_out["dcf"] = model_dcf(
                 fcf=scenario_fcf,
                 net_debt=net_debt,
@@ -395,19 +510,16 @@ def run_scenarios(
                 terminal_growth=0.025,
                 years=dcf_years,
             )
-
-            adj_yield = max(0.04 + sp["target_yield_adj"], 0.01)
             models_out["fcf_yield"] = model_fcf_yield(
                 fcf=scenario_fcf,
                 net_debt=net_debt,
                 shares=shares,
-                target_yield=adj_yield,
+                target_yield=yield_target,
             )
 
-        # MODEL 4 — ROIC/EP (pouze pokud máme nopat + roic)
+        # ── MODEL 4: ROIC/EP ─────────────────────────────────────────
         if nopat is not None and roic is not None and roic > 0 and nopat != 0:
-            adj_wacc    = max(wacc + sp["wacc_adj"], 0.04)
-            roic_growth = max(adj_growth + sp["roic_growth_adj"], 0.0)
+            roic_growth = max(adj_growth + (-0.02 if scenario == "bear" else 0.0), 0.0)
             models_out["roic_ep"] = model_roic_ep(
                 nopat=nopat,
                 roic=roic,
@@ -424,20 +536,25 @@ def run_scenarios(
         projected_revenue = revenue * ((1 + adj_growth) ** years)
 
         result[scenario] = {
-            "label":               sp["label"],
-            "revenue_cagr":        adj_growth,
-            "ebitda_margin":       adj_margin,
-            "ev_ebitda_multiple":  adj_multiple,
-            "projected_revenue":   projected_revenue,
-            "projected_ebitda":    ev_model.get("ebitda"),
-            "exit_ev":             ev_model.get("ev"),
+            "label":                {"bear": "Bear", "base": "Base", "bull": "Bull"}[scenario],
+            "firm_type":            firm_type,
+            "firm_profile":         profile["label"],
+            "revenue_cagr":         adj_growth,
+            "ebitda_margin":        adj_margin,
+            "ev_ebitda_multiple":   adj_multiple,
+            "projected_revenue":    projected_revenue,
+            "projected_ebitda":     ev_model.get("ebitda"),
+            "exit_ev":              ev_model.get("ev"),
             "exit_price_per_share": ev_model.get("price"),
-            "models":              models_out,
-            "composite":           comp,
-            "price":               comp["price"],
-            "ebitda":              ev_model.get("ebitda"),
-            "ev":                  ev_model.get("ev"),
-            "equity":              ev_model.get("equity"),
+            "models":               models_out,
+            "composite":            comp,
+            "price":                comp["price"],
+            "ebitda":               ev_model.get("ebitda"),
+            "ev":                   ev_model.get("ev"),
+            "equity":               ev_model.get("equity"),
+            "dcf_fcf_used":         scenario_fcf,
+            "fcf_growth_used":      scenario_fcf_growth,
+            "wacc_used":            adj_wacc,
         }
 
     return result
