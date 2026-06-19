@@ -102,7 +102,7 @@ export function MetricsGrid({ data }) {
     quarters
       .filter((q) => q[key] != null)
       .map((q) => ({
-        date: q.end?.slice(2, 7),
+        date: formatQuarterLabel(q.end),
         value: q[key] / 1e9,
       }))
       .reverse();
