@@ -117,6 +117,53 @@ FIRM_PROFILES = {
 }
 
 
+def detect_model_warnings(
+    firm_type: str,
+    net_debt: float,
+    ebitda: float,
+    fcf: float,
+    revenue_cagr_5y: Optional[float],
+    net_income_cagr_5y: Optional[float],
+) -> list[str]:
+    """
+    Detekuje situace kdy je konkrétní model méně vhodný pro danou firmu.
+    Nemění výpočty — jen vrací varování pro zobrazení uživateli.
+    """
+    warnings: list[str] = []
+
+    # Vysoká zadluženost zkresluje DCF a FCF Yield (citlivé na net_debt)
+    if ebitda and ebitda > 0 and net_debt > 0:
+        leverage = net_debt / ebitda
+        if leverage > 4.0:
+            warnings.append(
+                f"Net debt/EBITDA = {leverage:.1f}x — vysoká zadluženost. "
+                f"DCF a FCF Yield modely jsou citlivé na net_debt odečet "
+                f"a mohou podhodnocovat firmu, pokud je dluh dočasný "
+                f"(např. po akvizici)."
+            )
+
+    # Nízký nebo záporný FCF vůči EBITDA (CapEx/úroky stlačují cash generation)
+    if ebitda and ebitda > 0 and fcf is not None:
+        fcf_conversion = fcf / ebitda
+        if fcf_conversion < 0.25:
+            warnings.append(
+                f"FCF/EBITDA konverze = {fcf_conversion:.0%} — neobvykle nízká. "
+                f"DCF a FCF Yield mohou vycházet z dočasně stlačeného FCF "
+                f"(vysoký CapEx, úrokové náklady, jednorázové položky)."
+            )
+
+    # Záporné historické CAGR — TTM FCF nemusí být reprezentativní
+    if (revenue_cagr_5y is not None and revenue_cagr_5y < 0) or \
+       (net_income_cagr_5y is not None and net_income_cagr_5y < 0):
+        warnings.append(
+            "Historický 5Y CAGR (revenue nebo net income) je záporný. "
+            "DCF growth byl ořezán na konzervativní fallback (3 %) — "
+            "TTM čísla mohou odrážet dočasný pokles, ne strukturální trend."
+        )
+
+    return warnings
+
+
 def detect_firm_type(
     revenue: float,
     ebitda_margin: float,
@@ -392,7 +439,7 @@ def run_scenarios(
     Všechny vstupy jsou dostupné z main.py /valuation endpointu.
     Jediný nový vstup který musíš přidat do input_data v main.py: "cfo"
     """
-    # ── Základní vstupy ──────────────────────────────────────────────
+    # ── Základní vstupy (všechny dostupné v main.py) ─────────────────
     revenue            = float(input_data.get("revenue") or 0)
     ebitda_margin      = float(input_data.get("ebitda_margin") or 0.20)
     ev_ebitda_multiple = float(input_data.get("ev_ebitda_multiple") or 15.0)
@@ -405,7 +452,7 @@ def run_scenarios(
     revenue_growth = float(input_data.get("revenue_growth") or 0.05)
     nopat          = _safe(input_data.get("nopat"))
     roic           = _safe(input_data.get("roic"))
-    cfo            = _safe(input_data.get("cfo"))
+    cfo            = _safe(input_data.get("cfo"))   # nový vstup z sec.extract_cfo
 
     # ── FCF vstup ────────────────────────────────────────────────────
     fcf = _safe(input_data.get("fcf"))
@@ -415,16 +462,10 @@ def run_scenarios(
             fcf = revenue * fcf_margin_input
 
     # ── FCF growth: min(revenue_cagr_5y, net_income_cagr_5y, 0.15) ──
-    # Pouze pozitivní CAGR — záporný growth v DCF dává nereálné výsledky
-    # pro stabilní firmy (PFE po Paxlovid propadu, cyklické firmy atd.)
     revenue_cagr_5y    = _safe(input_data.get("revenue_cagr_5y"))
     net_income_cagr_5y = _safe(input_data.get("net_income_cagr_5y"))
-    candidates         = [
-        x for x in [revenue_cagr_5y, net_income_cagr_5y]
-        if x is not None and x > 0
-    ]
-    # Fallback 3 % = konzervativní dlouhodobý růst (GDP-like)
-    fcf_growth_base    = min(*candidates, 0.15) if candidates else 0.03
+    candidates         = [x for x in [revenue_cagr_5y, net_income_cagr_5y] if x is not None and x > 0]
+    fcf_growth_base    = min(*candidates, 0.15) if candidates else min(revenue_growth, 0.15)
 
     # ── Detekce typu firmy + kalibrace ───────────────────────────────
     firm_type = detect_firm_type(revenue, ebitda_margin, revenue_growth)
@@ -437,6 +478,18 @@ def run_scenarios(
         normalized_fcf = cfo * multiplier   # CFO x 0.65
     elif fcf is not None and fcf > 0:
         normalized_fcf = fcf
+
+    # ── Model warnings (jednou za firmu, ne per-scénář) ──────────────
+    # Použij TTM EBITDA (base margin x revenue) jako referenci pro leverage/conversion checky
+    ttm_ebitda_ref = revenue * ebitda_margin if revenue and ebitda_margin else None
+    model_warnings = detect_model_warnings(
+        firm_type=firm_type,
+        net_debt=net_debt,
+        ebitda=ttm_ebitda_ref,
+        fcf=fcf,
+        revenue_cagr_5y=revenue_cagr_5y,
+        net_income_cagr_5y=net_income_cagr_5y,
+    )
 
     scenario_overrides = scenario_overrides or {}
     result = {}
@@ -491,8 +544,8 @@ def run_scenarios(
         if fcf_margin and fcf_margin > 0 and revenue > 0:
             scenario_fcf = revenue * ((1 + adj_growth) ** years) * fcf_margin
 
-        # FCF growth: floor 0.0 — záporný growth dává nereálné DCF výsledky
-        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, 0.0), 0.15)
+        # FCF growth: konzervativní base ± scénářový adj, strop 0.15
+        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, -0.10), 0.15)
 
         # ── MODEL 1: EV/EBITDA ───────────────────────────────────────
         models_out["ev_ebitda"] = model_ev_ebitda(
@@ -561,6 +614,7 @@ def run_scenarios(
             "dcf_fcf_used":         scenario_fcf,
             "fcf_growth_used":      scenario_fcf_growth,
             "wacc_used":            adj_wacc,
+            "warnings":             model_warnings,
         }
 
     return result
