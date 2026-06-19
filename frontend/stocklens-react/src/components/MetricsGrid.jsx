@@ -36,6 +36,16 @@ const CHARTS = [
   { key: "ebitda", label: "EBITDA" },
 ];
 
+// Převede ISO datum konce kvartálu ("2024-03-31") na "Q1 '24"
+function formatQuarterLabel(isoDate) {
+  if (!isoDate) return "";
+  const [year, month] = isoDate.split("-");
+  const m = parseInt(month, 10);
+  const quarter = Math.ceil(m / 3);
+  const shortYear = year.slice(2);
+  return `Q${quarter} '${shortYear}`;
+}
+
 export function MetricsGrid({ data }) {
   if (!data) return null;
 
