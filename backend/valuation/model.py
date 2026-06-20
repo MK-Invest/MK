@@ -143,9 +143,12 @@ def detect_model_warnings(
         if leverage > 4.0:
             warnings.append(
                 f"Net debt/EBITDA = {leverage:.1f}x — vysoká zadluženost. "
-                f"DCF a FCF Yield modely jsou citlivé na net_debt odečet "
-                f"a mohou podhodnocovat firmu, pokud je dluh dočasný "
-                f"(např. po akvizici)."
+                f"DCF horizont byl zkrácen na 5 let (místo 10) — dlouhý "
+                f"horizont u zadlužené firmy implicitně předpokládá "
+                f"postupné splacení dluhu, což je u tohoto leverage "
+                f"příliš optimistický předpoklad. DCF a FCF Yield zůstávají "
+                f"citlivé na net_debt odečet a mohou podhodnocovat firmu, "
+                f"pokud je dluh dočasný (např. po akvizici)."
             )
 
     # Nízký nebo záporný FCF vůči EBITDA (CapEx/úroky stlačují cash generation)
@@ -507,6 +510,18 @@ def run_scenarios(
         net_income_cagr_5y=net_income_cagr_5y,
     )
 
+    # ── DCF horizont podle zadluženosti ──────────────────────────────
+    # Vysoce zadlužené firmy (net_debt/EBITDA > 4x): kratší horizont (5 let).
+    # 10letý DCF u silně zadlužené firmy implicitně předpokládá dlouhé
+    # postupné splácení dluhu z FCF, což je přehnaně optimistický předpoklad.
+    # Kratší horizont dá konzervativnější, ale realističtější obrázek.
+    high_leverage = (
+        ttm_ebitda_ref is not None and ttm_ebitda_ref > 0
+        and net_debt > 0
+        and (net_debt / ttm_ebitda_ref) > 4.0
+    )
+    base_dcf_years = 5 if high_leverage else 10
+
     scenario_overrides = scenario_overrides or {}
     result = {}
 
@@ -552,7 +567,7 @@ def run_scenarios(
         adj_multiple = _override("ev_ebitda_multiple", max(raw_multiple, profile["ev_ebitda_floor"]))
 
         adj_wacc  = max(profile["wacc_base"] + wacc_adj, 0.04)
-        dcf_years = max(years, 10)
+        dcf_years = max(years, base_dcf_years)
 
         # FCF pro tento scénář (override z UI nebo normalizovaný)
         scenario_fcf = normalized_fcf
@@ -659,6 +674,8 @@ def run_scenarios(
             "dcf_fcf_used":         scenario_fcf,
             "fcf_growth_used":      scenario_fcf_growth,
             "wacc_used":            adj_wacc,
+            "dcf_years_used":       dcf_years,
+            "high_leverage":        high_leverage,
             "warnings":             model_warnings,
         }
 

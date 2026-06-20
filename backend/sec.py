@@ -394,8 +394,8 @@ def extract_fcf_annual_history(gaap, years: int = 3) -> list[dict]:
         "PaymentsToAcquireProductiveAssets",
     ])
 
-    cfo_annual = _annual_only(cfo_items)
-    capex_annual = _annual_only(capex_items)
+    cfo_annual   = _dedupe_annual_by_year(_annual_only(cfo_items))
+    capex_annual = _dedupe_annual_by_year(_annual_only(capex_items))
 
     # Spáruj podle fiskálního roku (první 4 znaky "end" data)
     capex_by_year = {c["end"][:4]: c["val"] for c in capex_annual}
@@ -410,6 +410,20 @@ def extract_fcf_annual_history(gaap, years: int = 3) -> list[dict]:
         result.append({"end": c["end"], "fy": fy, "fcf": fcf_val})
 
     return result
+
+
+def _dedupe_annual_by_year(items: list[dict]) -> list[dict]:
+    """
+    Deduplikace ročních záznamů podle fiskálního roku (první 4 znaky 'end').
+    Pokud SEC vrátí víc záznamů pro stejný rok (různé units/revize/dodatečné
+    výkazy), vezme se ten s nejnovějším 'end' datem jako nejspolehlivější.
+    """
+    by_year: dict[str, dict] = {}
+    for i in items:
+        fy = i["end"][:4]
+        if fy not in by_year or i["end"] > by_year[fy]["end"]:
+            by_year[fy] = i
+    return list(by_year.values())
 
 
 def _annual_only(items: list[dict]) -> list[dict]:
