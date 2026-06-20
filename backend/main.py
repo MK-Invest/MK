@@ -578,6 +578,7 @@ async def valuation(ticker: str, body: ValuationRequest):
         "net_debt":          net_debt,
         "shares":            shares,
         "fcf":               fcf,
+        "fcf_3y_median": d.get("fcf_3y_median"),   # ← nové
         "nopat":             d.get("nopat"),
         "roic":              d.get("roic"),
         "cfo": d.get("cfo"),

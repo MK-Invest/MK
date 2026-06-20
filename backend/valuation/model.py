@@ -32,6 +32,12 @@ Vstupy input_data (všechny dostupné z main.py /valuation pipeline):
   net_income_cagr_5y float  5Y CAGR z history.net_income — sec.compute_cagr_5y
   tax_rate           float  efektivní daňová sazba        — compute_metrics
   cfo                float  TTM Cash From Operations      — sec.extract_cfo (nové)
+  fcf_3y_median      float  Medián FCF za posl. 3 fisk. roky — sec.compute_fcf_median (nové)
+
+DCF se počítá ve dvou variantách (pokud jsou data dostupná):
+  - "dcf"            : TTM FCF (standardní, citlivý na jednorázové výkyvy)
+  - "dcf_normalized" : 3Y mediánový FCF (robustní vůči jednorázovým propadům/
+                        windfall rokům — např. PFE post-COVID, akviziční dluh)
 """
 
 from __future__ import annotations
@@ -453,6 +459,7 @@ def run_scenarios(
     nopat          = _safe(input_data.get("nopat"))
     roic           = _safe(input_data.get("roic"))
     cfo            = _safe(input_data.get("cfo"))   # nový vstup z sec.extract_cfo
+    fcf_3y_median  = _safe(input_data.get("fcf_3y_median"))  # nový vstup, robustní FCF
 
     # ── FCF vstup ────────────────────────────────────────────────────
     fcf = _safe(input_data.get("fcf"))
@@ -478,6 +485,15 @@ def run_scenarios(
         normalized_fcf = cfo * multiplier   # CFO x 0.65
     elif fcf is not None and fcf > 0:
         normalized_fcf = fcf
+
+    # Druhý FCF vstup pro dcf_normalized model — 3Y medián
+    # Pro mega_tech firmy pořád preferujeme cfo x multiplier (growth CapEx normalizace
+    # je jiný typ úpravy než vyhlazení jednorázových výkyvů, oba mohou koexistovat)
+    fcf_for_median_model = None
+    if firm_type == "mega_tech" and cfo is not None and cfo > 0:
+        fcf_for_median_model = cfo * multiplier
+    elif fcf_3y_median is not None and fcf_3y_median > 0:
+        fcf_for_median_model = fcf_3y_median
 
     # ── Model warnings (jednou za firmu, ne per-scénář) ──────────────
     # Použij TTM EBITDA (base margin x revenue) jako referenci pro leverage/conversion checky
@@ -544,8 +560,14 @@ def run_scenarios(
         if fcf_margin and fcf_margin > 0 and revenue > 0:
             scenario_fcf = revenue * ((1 + adj_growth) ** years) * fcf_margin
 
-        # FCF growth: konzervativní base ± scénářový adj, strop 0.15
-        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, -0.10), 0.15)
+        # FCF pro dcf_normalized model (3Y medián, mega_tech: cfo x multiplier)
+        scenario_fcf_3y = fcf_for_median_model
+        if fcf_margin and fcf_margin > 0 and revenue > 0:
+            scenario_fcf_3y = scenario_fcf  # override platí pro oba DCF varianty stejně
+
+        # FCF growth: konzervativní base ± scénářový adj, floor 0.0 — záporný
+        # growth dává nereálné výsledky pro stabilní firmy (viz PFE)
+        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, 0.0), 0.15)
 
         # ── MODEL 1: EV/EBITDA ───────────────────────────────────────
         models_out["ev_ebitda"] = model_ev_ebitda(
@@ -576,6 +598,22 @@ def run_scenarios(
                 target_yield=yield_target,
             )
 
+        # ── MODEL 2b: DCF normalizovaný (3Y medián FCF) ──────────────
+        # Robustní vůči jednorázovým výkyvům TTM FCF (akviziční dluh,
+        # COVID windfall roky apod.). Zobrazuje se vedle standardního DCF,
+        # nenahrazuje ho — uživatel vidí oba pohledy.
+        if scenario_fcf_3y is not None and scenario_fcf_3y > 0:
+            models_out["dcf_normalized"] = model_dcf(
+                fcf=scenario_fcf_3y,
+                net_debt=net_debt,
+                shares=shares,
+                wacc=adj_wacc,
+                fcf_growth=scenario_fcf_growth,
+                terminal_growth=0.025,
+                years=dcf_years,
+            )
+            models_out["dcf_normalized"]["fcf_source"] = "3y_median"
+
         # ── MODEL 4: ROIC/EP ─────────────────────────────────────────
         if nopat is not None and roic is not None and roic > 0 and nopat != 0:
             roic_growth = max(adj_growth + (-0.02 if scenario == "bear" else 0.0), 0.0)
@@ -589,7 +627,14 @@ def run_scenarios(
                 years=years,
             )
 
-        valid_models      = [m for m in models_out.values() if m and m.get("price") is not None]
+        # Composite se počítá jen z původní sady modelů (ev_ebitda, dcf,
+        # fcf_yield, roic_ep) — dcf_normalized je doplňkový pohled a
+        # nesmí změnit composite cenu u firem, kde už dnes funguje správně.
+        composite_keys = {"ev_ebitda", "dcf", "fcf_yield", "roic_ep"}
+        valid_models = [
+            m for k, m in models_out.items()
+            if k in composite_keys and m and m.get("price") is not None
+        ]
         comp              = composite_price(valid_models)
         ev_model          = models_out["ev_ebitda"]
         projected_revenue = revenue * ((1 + adj_growth) ** years)

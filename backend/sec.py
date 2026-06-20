@@ -2,6 +2,7 @@ import datetime
 import math
 import requests
 from collections import defaultdict
+from typing import Optional
 
 HEADERS = {
     "User-Agent": "StockLens/1.0 (martin.kotek.317066@gmail.com)",
@@ -374,6 +375,77 @@ def extract_cfo(gaap) -> Optional[float]:
     ])
     return compute_ttm(cfo)
 
+def extract_fcf_annual_history(gaap, years: int = 3) -> list[dict]:
+    """
+    Vrátí roční FCF historii (CFO - CapEx) za posledních N fiskálních let,
+    odvozenou z 10-K (FY) záznamů — ne kvartálních.
+
+    Používá se pro normalizaci DCF u firem s dočasně extrémním TTM FCF
+    (např. PFE post-COVID propad, akviziční dluh).
+    """
+    cfo_items = section_units_any(gaap, [
+        "NetCashProvidedByOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivities",
+    ])
+    capex_items = section_units_any(gaap, [
+        "CapitalExpenditures",
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PurchaseOfPropertyPlantAndEquipmentNet",
+        "PaymentsToAcquireProductiveAssets",
+    ])
+
+    cfo_annual = _annual_only(cfo_items)
+    capex_annual = _annual_only(capex_items)
+
+    # Spáruj podle fiskálního roku (první 4 znaky "end" data)
+    capex_by_year = {c["end"][:4]: c["val"] for c in capex_annual}
+
+    result = []
+    for c in sorted(cfo_annual, key=lambda x: x["end"], reverse=True)[:years]:
+        fy = c["end"][:4]
+        capex_val = capex_by_year.get(fy)
+        if capex_val is None:
+            continue
+        fcf_val = c["val"] - abs(capex_val)
+        result.append({"end": c["end"], "fy": fy, "fcf": fcf_val})
+
+    return result
+
+
+def _annual_only(items: list[dict]) -> list[dict]:
+    """Filtruje pouze 10-K (FY) záznamy s validní hodnotou."""
+    out = []
+    for i in items:
+        form = (i.get("form") or "").upper()
+        fp = i.get("fp", "")
+        if "10-K" in form or fp in ("FY", "A"):
+            v = safe_float(i.get("val"))
+            if v is not None and i.get("end"):
+                out.append({"end": i["end"], "val": v})
+    return out
+
+
+def section_units_any(section: dict, candidates: list[str]) -> list[dict]:
+    """Vrátí raw items (se všemi poli, ne jen end/val) pro první kandidáta s daty."""
+    for c in candidates:
+        units = section.get(c, {}).get("units", {})
+        for unit, items in units.items():
+            if "USD" in unit.upper() and items:
+                return items
+    return []
+
+
+def compute_fcf_median(fcf_history: list[dict]) -> float | None:
+    """
+    Medián z roční FCF historie — robustní vůči jednorázovým výkyvům
+    (např. COVID windfall rok u PFE), na rozdíl od průměru.
+    """
+    import statistics
+    values = [x["fcf"] for x in fcf_history if x.get("fcf") is not None]
+    if not values:
+        return None
+    return statistics.median(values)
+
 def extract_net_debt(gaap):
     lt   = pick_latest_scalar(gaap, ["LongTermDebt"]) or 0
     st   = pick_latest_scalar(gaap, ["DebtCurrent"]) or 0
@@ -473,6 +545,9 @@ def extract_fundamentals(data):
     net_income_val = compute_ttm(net_income)
     net_income_ttm = net_income_val if net_income_val and abs(net_income_val) < 1e12 else None
 
+    fcf_annual_history = extract_fcf_annual_history(gaap, years=3)
+    fcf_3y_median = compute_fcf_median(fcf_annual_history)
+
     return {
         "revenue":       revenue_ttm,
         "net_income":    net_income_ttm,
@@ -483,6 +558,8 @@ def extract_fundamentals(data):
         "cfo": extract_cfo(gaap),
         "revenue_cagr_5y":    revenue_cagr_5y,      # ← nové
         "net_income_cagr_5y": net_income_cagr_5y,   # ← nové
+        "fcf_3y_median":      fcf_3y_median,        # ← nové
+        "fcf_annual_history": fcf_annual_history,    # ← nové, pro debug/frontend
         "source":        "sec",
         "confidence":    0.85,
         "history": {

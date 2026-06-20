@@ -123,6 +123,7 @@ function ValuationModelsTable({ scenarios, price }) {
     { key: "composite", label: "Composite" },
     { key: "ev_ebitda", label: "EV/EBITDA" },
     { key: "dcf", label: "DCF" },
+    { key: "dcf_normalized", label: "DCF (3Y median)" },
     { key: "fcf_yield", label: "FCF Yield" },
     { key: "roic_ep", label: "ROIC / EP" },
   ];
