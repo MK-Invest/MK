@@ -17,6 +17,14 @@ const fmtDate = s => {
   const d = new Date(s);
   return `${d.getDate().toString().padStart(2,"0")}.${(d.getMonth()+1).toString().padStart(2,"0")}.${d.getFullYear()}`;
 };
+// Převede ISO datum konce kvartálu ("2026-03-29") na "Q1 '26"
+const fmtQuarter = s => {
+  if (!s) return "—";
+  const d = new Date(s);
+  const quarter = Math.ceil((d.getMonth() + 1) / 3);
+  const shortYear = d.getFullYear().toString().slice(2);
+  return `Q${quarter} '${shortYear}`;
+};
 
 // ─────────────────────────────────────────────────────────
 // PRIMITIVES
@@ -75,7 +83,7 @@ function QChart({ data, dataKey, label, color = "#38BDF8" }) {
   if (!data?.length) return <div style={{ color: "#475569", padding: 12, fontSize: 12 }}>No data</div>;
 
   const chartData = [...data].reverse().map(q => ({
-    date: fmtDate(q.end).slice(0, 5),
+    date: fmtQuarter(q.end),
     val:  q[dataKey] != null ? +(q[dataKey] / 1e9).toFixed(2) : null,
   }));
 
