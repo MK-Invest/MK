@@ -252,6 +252,74 @@ def model_ev_ebitda(
 # MODEL 2 — DCF  (diskontované FCF)
 # =========================================================
 
+def model_dcf_short(
+    fcf: float,
+    ebitda: float,
+    net_debt: float,
+    shares: float,
+    wacc: float            = 0.10,
+    fcf_growth: float       = 0.10,
+    exit_multiple: float    = 15.0,
+    years: int              = 3,
+) -> dict:
+    """
+    Krátkodobý DCF pro trading horizont (ne investiční DCF).
+
+    Na rozdíl od model_dcf NEPOUŽÍVÁ Gordonův model terminální hodnoty
+    (která implicitně předpokládá nekonečný růst a u krátkého horizontu
+    začne tvořit 80-90%+ výsledné ceny — viz analýza: s years=3 by
+    klasický DCF byl prakticky jen sázka na terminal_growth/wacc, ne na
+    skutečnou fundamentální projekci).
+
+    Místo toho:
+      Fáze 1: explicitní FCF za `years` let, diskontované k dnešku
+      Fáze 2: "exit hodnota" = projected EBITDA (za `years` let) x exit_multiple
+              — stejná logika jako EV/EBITDA model, ne nekonečná řada
+
+    Odpovídá na otázku: "Pokud firma poroste `fcf_growth` ročně a za
+    `years` let ji koupí/ocení trh na `exit_multiple` EBITDA, kolik je
+    fér zaplatit dnes?" — to je otázka tradera s krátkým horizontem,
+    ne investora počítajícího perpetuitu.
+    """
+    if not shares or shares <= 0 or fcf <= 0 or not ebitda or ebitda <= 0:
+        return {"model": "dcf_short", "price": None, "confidence": 0.0}
+
+    fcf_g = min(abs(fcf_growth), 0.60) * (1 if fcf_growth >= 0 else -1)
+
+    pv_fcfs = 0.0
+    cf = fcf
+    ebitda_proj = ebitda
+    for t in range(1, years + 1):
+        cf          *= (1 + fcf_g)
+        ebitda_proj *= (1 + fcf_g)
+        pv_fcfs     += cf / ((1 + wacc) ** t)
+
+    exit_ev      = ebitda_proj * exit_multiple
+    pv_exit      = exit_ev / ((1 + wacc) ** years)
+
+    intrinsic_ev = pv_fcfs + pv_exit
+    equity_value = intrinsic_ev - net_debt
+    price        = _safe(equity_value / shares)
+    base_conf    = 0.75 if fcf > 0 else 0.30
+
+    return {
+        "model":              "dcf_short",
+        "price":              price,
+        "pv_fcfs":            pv_fcfs,
+        "pv_exit":            pv_exit,
+        "projected_ebitda":   ebitda_proj,
+        "exit_ev":            exit_ev,
+        "intrinsic_ev":       intrinsic_ev,
+        "equity_value":       equity_value,
+        "fcf":                fcf,
+        "wacc":               wacc,
+        "fcf_growth":         fcf_g,
+        "exit_multiple":      exit_multiple,
+        "years":              years,
+        "confidence":         base_conf,
+    }
+
+
 def model_dcf(
     fcf: float,
     net_debt: float,
@@ -262,7 +330,7 @@ def model_dcf(
     years: int             = 10,
 ) -> dict:
     """
-    Dvoustupňový DCF:
+    Dvoustupňový DCF (klasický, investiční horizont):
       Fáze 1: explicitní FCF projekce na `years` let
       Fáze 2: Gordonův model terminální hodnoty
 
@@ -273,6 +341,11 @@ def model_dcf(
     Interní safety cap 60 % chrání jen proti overflow/překlepu — legitimně
     agresivní odhady (např. 30% meziroční růst z analytického reportu)
     musí projít beze změny, model je nemá potichu ořezávat.
+
+    POZNÁMKA: pro krátký trading horizont (1-3 roky) preferuj
+    model_dcf_short — Gordonův model zde tvoří 80%+ výsledné ceny a
+    výsledek pak odráží hlavně terminal_growth/wacc, ne skutečnou
+    fundamentální projekci firmy.
     """
     if not shares or shares <= 0 or fcf <= 0:
         return {"model": "dcf", "price": None, "confidence": 0.0}
@@ -668,6 +741,24 @@ def run_scenarios(
                 years=dcf_years,
             )
             models_out["dcf_normalized"]["fcf_source"] = "3y_median"
+
+        # ── MODEL 2c: DCF krátký horizont (trading, ne investice) ────
+        # Bez Gordonova modelu — exit hodnota = projected EBITDA x multiple,
+        # stejná logika jako EV/EBITDA model. Horizont capped na 3 roky
+        # bez ohledu na 'years' parametr požadavku — pro delší horizont
+        # použij standardní 'dcf' nebo 'dcf_normalized'.
+        if scenario_fcf is not None and scenario_fcf > 0:
+            short_years = min(years, 3)
+            models_out["dcf_short"] = model_dcf_short(
+                fcf=scenario_fcf,
+                ebitda=revenue * adj_margin,  # TTM EBITDA base, projektuje se uvnitř modelu
+                net_debt=net_debt,
+                shares=shares,
+                wacc=adj_wacc,
+                fcf_growth=scenario_fcf_growth,
+                exit_multiple=adj_multiple,
+                years=short_years,
+            )
 
         # ── MODEL 4: ROIC/EP ─────────────────────────────────────────
         if nopat is not None and roic is not None and roic > 0 and nopat != 0:
