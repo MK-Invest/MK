@@ -513,23 +513,6 @@ def compute_cagr_5y(series: list[dict]) -> float | None:
 
     return cagr
 
-def extract_latest_annual_series(section: dict, candidates: list[str]) -> list[dict]:
-    """
-    Vrátí roční (10-K/20-F, fp=FY) záznamy pro daný koncept — používá se
-    jako fallback pro compute_ttm() když chybí kompletní sada 4 čistých
-    kvartálů (např. mezera v SEC podáních, firma po restrukturalizaci).
-    """
-    for c in candidates:
-        units = section.get(c, {}).get("units", {})
-        for unit, items in units.items():
-            if "USD" not in unit.upper():
-                continue
-            annual = _annual_only(items)
-            if annual:
-                return annual
-    return []
-
-
 def extract_fundamentals(data):
     facts = data.get("facts", {})
     gaap  = facts.get("us-gaap", {})
@@ -540,26 +523,22 @@ def extract_fundamentals(data):
         "EntityCommonStockSharesOutstanding",
     ])
 
-    revenue_candidates = [
+    revenue = pick_first_existing(gaap, [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
         "SalesRevenueNet",
         "SalesRevenueGoodsNet",
         "RevenueFromContractWithCustomerIncludingAssessedTax",
         "RevenuesNetOfInterestExpense",
-    ]
-    revenue = pick_first_existing(gaap, revenue_candidates)
+    ])
     revenue = sorted(revenue, key=lambda x: x["end"], reverse=True)
-    revenue_annual = extract_latest_annual_series(gaap, revenue_candidates)
 
-    net_income_candidates = [
+    net_income = pick_first_existing(gaap, [
         "NetIncomeLoss",
         "ProfitLoss",
         "NetIncomeLossAvailableToCommonStockholdersBasic",
-    ]
-    net_income = pick_first_existing(gaap, net_income_candidates)
+    ])
     net_income = sorted(net_income, key=lambda x: x["end"], reverse=True)
-    net_income_annual = extract_latest_annual_series(gaap, net_income_candidates)
 
     op_income = pick_first_existing(gaap, [
         "OperatingIncomeLoss",
@@ -579,11 +558,8 @@ def extract_fundamentals(data):
     ])
     depreciation = sorted(depreciation, key=lambda x: x["end"], reverse=True)
 
-    # annual_series fallback: pokud chybí kompletní sada 4 čistých kvartálů
-    # (mezera v SEC podáních, firma po spin-offu/restrukturalizaci jako 3M),
-    # použij nejnovější celoroční (10-K) hodnotu místo vrácení None.
-    revenue_ttm    = compute_ttm(revenue, annual_series=revenue_annual)
-    net_income_val = compute_ttm(net_income, annual_series=net_income_annual)
+    revenue_ttm    = compute_ttm(revenue)
+    net_income_val = compute_ttm(net_income)
     net_income_ttm = net_income_val if net_income_val and abs(net_income_val) < 1e12 else None
 
     fcf_annual_history = extract_fcf_annual_history(gaap, years=3)
