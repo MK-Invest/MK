@@ -130,7 +130,23 @@ function QChart({ data, dataKey, label, color = "#38BDF8", unit = "B" }) {
 function GrowthInputsForm({ scenarios, onRecalculate, recalculating }) {
   // Předvyplň aktuálními hodnotami (auto-odhad nebo dříve zadané),
   // ať uživatel vidí od čeho vychází, ne prázdná pole.
+  //
+  // Pokud auto-odhad vyjde záporný (typicky firma po restrukturalizaci/
+  // spin-offu, kde 5Y historie obsahuje starý pokles — viz MMM/3M),
+  // záporné číslo v poli matoucně vypadá jako "model predikuje propad",
+  // i když jde jen o zašuměnou historii. Místo toho předvyplníme
+  // konzervativní kladné defaulty (2/4/6 %), které si uživatel může
+  // libovolně upravit — lepší startovní bod než matoucí záporná čísla.
+  const NEGATIVE_FALLBACK = { bear: 2, base: 4, bull: 6 };
+
+  const hasNegativeAutoEstimate = ["bear", "base", "bull"].some(
+    (key) => (scenarios?.[key]?.revenue_cagr ?? 0) < 0
+  );
+
   const initial = (key) => {
+    if (hasNegativeAutoEstimate) {
+      return NEGATIVE_FALLBACK[key].toFixed(1);
+    }
     const v = scenarios?.[key]?.revenue_cagr;
     return v != null ? (v * 100).toFixed(1) : "";
   };
@@ -240,6 +256,13 @@ function GrowthInputsForm({ scenarios, onRecalculate, recalculating }) {
         Roční růst tržeb, který očekáváš pro daný scénář. Použije se konzistentně
         pro EV/EBITDA i DCF model. Prázdné pole = automatický odhad z historie.
       </div>
+      {hasNegativeAutoEstimate && (
+        <div style={{ fontSize: 11, color: "#FBBF24", maxWidth: 280 }}>
+          ⚠ Automatický odhad z historie vyšel záporný (firma pravděpodobně
+          prošla restrukturalizací nebo spin-offem, který zkresluje 5Y data) —
+          předvyplnili jsme konzervativní 2/4/6 %. Uprav podle vlastního úsudku.
+        </div>
+      )}
     </div>
   );
 }
