@@ -80,25 +80,17 @@ function Row({ label, value, color }) {
 // QUARTERLY BAR CHART
 // ─────────────────────────────────────────────────────────
 
-function QChart({ data, dataKey, label, color = "#38BDF8", unit = "B" }) {
+function QChart({ data, dataKey, label, color = "#38BDF8" }) {
   if (!data?.length) return <div style={{ color: "#475569", padding: 12, fontSize: 12 }}>No data</div>;
-
-  // unit řídí škálování i formát tooltipu:
-  //   "B" — miliardy USD (revenue, net income, EBITDA)
-  //   "x" — násobek beze škálování (P/E, P/S)
-  //   "$" — dolary beze škálování (EPS)
-  const scale = unit === "B" ? 1e9 : 1;
-  const suffix = unit === "B" ? " mld." : unit === "x" ? "x" : " USD";
-  const unitLabel = unit === "B" ? "(mld. USD)" : unit === "x" ? "(násobek)" : "(USD)";
 
   const chartData = [...data].reverse().map(q => ({
     date: fmtQuarter(q.end),
-    val:  q[dataKey] != null ? +(q[dataKey] / scale).toFixed(2) : null,
+    val:  q[dataKey] != null ? +(q[dataKey] / 1e9).toFixed(2) : null,
   }));
 
   return (
     <div style={{ padding: "12px 0" }}>
-      <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>{label} {unitLabel}</div>
+      <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>{label} (mld. USD)</div>
       <ResponsiveContainer width="100%" height={140}>
         <BarChart data={chartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
           <CartesianGrid stroke="#1E293B" strokeDasharray="3 3" vertical={false} />
@@ -109,7 +101,7 @@ function QChart({ data, dataKey, label, color = "#38BDF8", unit = "B" }) {
             contentStyle={{ background: "#0F172A", border: "1px solid #1E3A5F", borderRadius: 6, fontSize: 12 }}
             labelStyle={{ color: "#94A3B8" }}
             itemStyle={{ color }}
-            formatter={v => [`${v}${suffix}`, label]}
+            formatter={v => [`${v} mld.`, label]}
           />
           <Bar dataKey="val" fill={color} radius={[3, 3, 0, 0]} />
         </BarChart>
@@ -325,6 +317,19 @@ function ValuationModelsTable({ scenarios, price, onRecalculate, recalculating }
   );
 }
 
+function TrendRow({ label, value, note }) {
+  const ok = value === true;
+  const bad = value === false;
+  return (
+    <tr>
+      <td style={S.tdLabel}>{label}</td>
+      <td style={{ ...S.td, ...(ok ? S.pos : bad ? S.neg : {}) }}>
+        {ok ? "✅" : bad ? "❌" : "—"} {note || ""}
+      </td>
+    </tr>
+  );
+}
+
 // ─────────────────────────────────────────────────────────
 // MAIN DASHBOARD
 // ─────────────────────────────────────────────────────────
@@ -358,17 +363,6 @@ export function StockDashboard({ data, onRecalculate, recalculating }) {
     op_income:  opH[i]?.val ?? null,
     dep:        depH[i]?.val ?? null,
     ebitda:     (opH[i]?.val != null && depH[i]?.val != null) ? opH[i].val + depH[i].val : null,
-  }));
-
-  // Doplň P/E, P/S, EPS z metrics.quarters (jiný zdroj, stejné 'end' datum)
-  // do stejných řádků jako revenue/net_income/ebitda, ať grafy čerpají
-  // z jediného sloučeného pole.
-  const quartersByEnd = Object.fromEntries(quarters.map(q => [q.end, q]));
-  const chartRows = histRows.map(r => ({
-    ...r,
-    pe:  quartersByEnd[r.end]?.pe  ?? null,
-    ps:  quartersByEnd[r.end]?.ps  ?? null,
-    eps: quartersByEnd[r.end]?.eps ?? null,
   }));
 
   return (
@@ -475,13 +469,159 @@ export function StockDashboard({ data, onRecalculate, recalculating }) {
 
 <Section title="Vývoj kvartálních výsledků — grafy">
           <div style={S.grid3}>
-            <QChart data={chartRows} dataKey="revenue"    label="Tržby"       color="#38BDF8" unit="B" />
-            <QChart data={chartRows} dataKey="net_income" label="Čistý zisk"  color="#4ADE80" unit="B" />
-            <QChart data={chartRows} dataKey="ebitda"     label="EBITDA"      color="#FBBF24" unit="B" />
-            <QChart data={chartRows} dataKey="pe"         label="P/E"         color="#A78BFA" unit="x" />
-            <QChart data={chartRows} dataKey="ps"         label="P/S"         color="#F472B6" unit="x" />
-            <QChart data={chartRows} dataKey="eps"        label="EPS"         color="#34D399" unit="$" />
+            <QChart data={histRows} dataKey="revenue"   label="Tržby"       color="#38BDF8" />
+            <QChart data={histRows} dataKey="net_income" label="Čistý zisk"  color="#4ADE80" />
+            <QChart data={histRows} dataKey="ebitda"    label="EBITDA"      color="#FBBF24" />
           </div>
+        </Section>
+
+        {/* ── KVARTÁLNÍ TABULKA ── */}
+        <Section title="Vývoj kvartálních výsledků — tabulka">
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Datum</th>
+                <th style={S.th}>Tržby</th>
+                <th style={S.th}>Čistý zisk</th>
+                <th style={S.th}>Provozní zisk</th>
+                <th style={S.th}>EBITDA</th>
+              </tr>
+            </thead>
+            <tbody>
+              {histRows.map((r, i) => (
+                <tr key={i}>
+                  <td style={S.tdLabel}>{fmtDate(r.end)}</td>
+                  <td style={S.td}>{fmtB(r.revenue)}</td>
+                  <td style={{ ...S.td, ...(r.net_income < 0 ? S.neg : {}) }}>{fmtB(r.net_income)}</td>
+                  <td style={{ ...S.td, ...(r.op_income < 0 ? S.neg : {}) }}>{fmtB(r.op_income)}</td>
+                  <td style={S.td}>{fmtB(r.ebitda)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+
+        {/* ── VALUACE PO KVARTÁLECH ── */}
+        <Section title="Valuace po jednotlivých kvartálech">
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Datum</th>
+                <th style={S.th}>P/E</th>
+                <th style={S.th}>EV/EBITDA</th>
+                <th style={S.th}>P/S</th>
+                <th style={S.th}>EPS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {quarters.map((q, i) => {
+                const extreme = q.pe != null && q.pe > 200;
+                return (
+                  <tr key={i}>
+                    <td style={S.tdLabel}>{fmtDate(q.end)}</td>
+                    <td style={{ ...S.td, ...(extreme ? S.warn : {}) }}>
+                      {q.pe != null ? q.pe.toFixed(2) : "—"}
+                      {extreme && <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 4 }}>⚠</span>}
+                    </td>
+                    <td style={S.td}>{q.ev_ebitda != null ? q.ev_ebitda.toFixed(2) : "—"}</td>
+                    <td style={S.td}>{q.ps != null ? q.ps.toFixed(2) : "—"}</td>
+                    <td style={S.td}>{q.eps != null ? `${q.eps.toFixed(3)} USD` : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {quarters.some(q => q.pe > 200) && (
+            <div style={{ fontSize: 11, color: "#64748B", padding: "6px 12px" }}>
+              ⚠ Extrémní P/E vzniká při téměř nulovém čistém zisku — neodráží skutečnou valuaci.
+            </div>
+          )}
+        </Section>
+
+        {/* ── FINANČNÍ ZDRAVÍ ── */}
+        <Section title="Finanční zdraví">
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Ukazatel</th>
+                <th style={S.th}>Vyhodnocení</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={S.tdLabel}>Likvidita</td>
+                <td style={S.td}>
+                  <span style={S.badge(ttm.current_ratio >= 1.5 ? "green" : ttm.current_ratio >= 1 ? "neutral" : "red")}>
+                    {ttm.current_ratio >= 1.5 ? "Dobrá" : ttm.current_ratio >= 1 ? "Přijatelná" : "Slabá"}
+                  </span>
+                  {" "}(Current Ratio {ttm.current_ratio?.toFixed(2)})
+                </td>
+              </tr>
+              <tr>
+                <td style={S.tdLabel}>Free Cash Flow</td>
+                <td style={S.td}>
+                  <span style={S.badge(f.fcf > 0 ? "green" : "red")}>
+                    {f.fcf > 0 ? "Pozitivní" : "Negativní"}
+                  </span>
+                  {" "}{fmtB(f.fcf)}
+                </td>
+              </tr>
+              <tr>
+                <td style={S.tdLabel}>Dividendy</td>
+                <td style={S.td}>
+                  <span style={S.badge(f.dps > 0 ? "green" : "neutral")}>
+                    {f.dps > 0 ? "Vypláceny" : "Nevypláceny"}
+                  </span>
+                </td>
+              </tr>
+              <tr>
+                <td style={S.tdLabel}>Dividendový výnos</td>
+                <td style={{ ...S.td, ...(ttm.dividend_yield > 0.05 ? S.pos : {}) }}>
+                  {fmtPct(ttm.dividend_yield)}
+                  {ttm.dividend_yield > 0.05 && " — velmi vysoký"}
+                </td>
+              </tr>
+              <tr>
+                <td style={S.tdLabel}>ROE</td>
+                <td style={{ ...S.td, ...(ttm.roe >= 0.15 ? S.pos : ttm.roe >= 0.08 ? {} : S.neg) }}>
+                  {fmtPct(ttm.roe)}
+                  {" — "}{ttm.roe >= 0.15 ? "nadprůměrné" : ttm.roe >= 0.08 ? "průměrné" : "podprůměrné"}
+                </td>
+              </tr>
+              <tr>
+                <td style={S.tdLabel}>Čistý dluh</td>
+                <td style={S.td}>{fmtB(ttm.net_debt ?? f.net_debt)}</td>
+              </tr>
+              <tr>
+                <td style={S.tdLabel}>Obrat pracovního kapitálu</td>
+                <td style={S.td}>{fmtB(f.operating_working_capital)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </Section>
+
+        {/* ── TRENDOVÉ SIGNÁLY ── */}
+        <Section title="Trendové signály">
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Faktor</th>
+                <th style={S.th}>Stav</th>
+              </tr>
+            </thead>
+            <tbody>
+              <TrendRow label="Růst tržeb (QoQ)"       value={trend.revenue_up}         note={trend.revenue_growth != null ? `${(trend.revenue_growth * 100).toFixed(1)} %` : ""} />
+              <TrendRow label="FCF pozitivní"           value={trend.fcf_positive} />
+              <TrendRow label="FCF silné (yield >5 %)" value={trend.fcf_strong} />
+              <TrendRow label="EPS roste"               value={trend.eps_growing} />
+              <TrendRow label="ROE nadprůměrné (>15 %)" value={trend.roe_good} />
+              <TrendRow label="ROIC elite (>20 %)"     value={trend.roic_elite} />
+              <TrendRow label="Vyplácí dividendu"       value={trend.pays_dividend} />
+              <TrendRow label="Vysoký dividendový výnos" value={trend.high_yield_dividend} />
+              <TrendRow label="Likvidita dostatečná"    value={trend.liquid} />
+              <TrendRow label="Nízké zadlužení (D/E <0.5)" value={trend.low_debt} />
+            </tbody>
+          </table>
         </Section>
 
         {/* ── TECHNICKÁ ANALÝZA ── */}
