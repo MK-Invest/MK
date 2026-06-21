@@ -176,30 +176,38 @@ PRIORITY = {"yfinance": 4, "fmp": 3, "sec": 2, "twelvedata": 1}
 def merge(*sources) -> dict:
     out = {}
     score = {}
-
+ 
     for s in sources:
         if not s:
             continue
-
+ 
         src = s.get("source", "unknown")
         conf = s.get("confidence", 0.5)
         base_score = PRIORITY.get(src, 0) + conf
-
+ 
         for k, v in s.items():
             if k in ("source", "confidence"):
                 continue
-
-            # SPECiÁLNÍ FIX: historie nikdy nepřepisuj
+ 
+            # SPECIÁLNÍ FIX: historie nikdy nepřepisuj
             if k == "history":
                 out.setdefault("history", v)
                 continue
-
+ 
+            # KLÍČOVÝ FIX: None hodnota nesmí přepsat existující platná data,
+            # bez ohledu na prioritu zdroje. Bez tohoto fixu vyšší-prioritní
+            # zdroj s chybějícími daty (např. FMP bez API klíče nebo bez
+            # pokrytí pro daný ticker) tiše smaže platná data z nižší-
+            # prioritního zdroje (např. SEC), což shodí celý valuation model.
+            if v is None:
+                continue
+ 
             sscore = base_score
-
+ 
             if k not in out or sscore > score.get(k, -1):
                 out[k] = v
                 score[k] = sscore
-
+ 
     return out
 
 
