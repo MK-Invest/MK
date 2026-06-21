@@ -171,7 +171,7 @@ def _ytd_to_quarterly(items, cutoff):
             continue
         if fp in ("Q1", "Q2", "Q3"):
             by_year.setdefault(year, {})[fp] = {"end": i["end"], "val": v}
-        elif "10-K" in form or "20-F" in form or fp in ("FY", "A"):
+        elif "10-K" in form or fp in ("FY", "A"):
             by_year.setdefault(year, {})["FY"] = {"end": i["end"], "val": v}
 
     result = []
@@ -245,12 +245,9 @@ def extract_time_series(section, concept, n=20):
         quarterly = _ytd_to_quarterly(items, cutoff)
 
     # ── Roční záznamy pro Q4 rekonstrukci ────────────────────────────
-    # 20-F = roční výkaz zahraničních emitentů (ADR firmy jako BABA) —
-    # nemají kvartální 10-Q, jen roční podání. Bez 20-F by annual zůstalo
-    # prázdné a celá historie (i fallback níže) by se vrátila prázdná.
     annual = [
         i for i in items
-        if (i.get("form") or "").upper() in ("10-K", "20-F")
+        if (i.get("form") or "").upper() == "10-K"
         and i.get("end", "") >= cutoff
         and i.get("val") is not None
     ]
@@ -430,12 +427,12 @@ def _dedupe_annual_by_year(items: list[dict]) -> list[dict]:
 
 
 def _annual_only(items: list[dict]) -> list[dict]:
-    """Filtruje pouze 10-K/20-F (FY) záznamy s validní hodnotou."""
+    """Filtruje pouze 10-K (FY) záznamy s validní hodnotou."""
     out = []
     for i in items:
         form = (i.get("form") or "").upper()
         fp = i.get("fp", "")
-        if "10-K" in form or "20-F" in form or fp in ("FY", "A"):
+        if "10-K" in form or fp in ("FY", "A"):
             v = safe_float(i.get("val"))
             if v is not None and i.get("end"):
                 out.append({"end": i["end"], "val": v})
