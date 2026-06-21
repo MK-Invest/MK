@@ -683,17 +683,21 @@ def run_scenarios(
 
         # FCF growth pro DCF: STEJNÉ číslo jako adj_growth (uživatelův revenue_cagr).
         #
-        # Uživatelův vstup: cap jen na 60 % jako pojistka proti overflow/překlepu
-        # (ne proti legitimně agresivním odhadům — pokud report čeká 30% meziroční
-        # růst, model to musí respektovat, ne potichu ořezávat na 15 %).
-        # Floor 0.0 — záporný FCF growth v 10letém DCF dává nereálné výsledky
-        # i pro firmy, kde uživatel čeká dočasný pokles (viz PFE bear case).
+        # Uživatelův vstup: cap na ±60 % jako pojistka proti overflow/překlepu
+        # (ne proti legitimně agresivním NEBO negativním odhadům — pokud
+        # uživatel vědomě zadá bear scénář s poklesem -15 %, model to musí
+        # respektovat, ne ho tiše přepsat na 0 %. Floor 0.0 dával smysl jen
+        # jako ochrana automatického fallbacku, ne jako cenzura vlastního
+        # úsudku uživatele).
         #
-        # Fallback odhad (bez uživatelského vstupu): cap 15 % zůstává — to je
-        # konzervativní pojistka pro automaticky odvozený růst z historických
-        # dat, kde nechceme, aby šumové 5Y CAGR vygenerovalo nereálné DCF.
+        # Fallback odhad (bez uživatelského vstupu): floor 0.0 + cap 15 %
+        # zůstává — to je konzervativní pojistka pro automaticky odvozený
+        # růst z historických dat, kde nechceme, aby šumové 5Y CAGR
+        # vygenerovalo nereálné DCF (viz PFE — záporný 5Y CAGR z dat
+        # zkreslených jednorázovým poklesem).
         if user_growth is not None:
-            scenario_fcf_growth = min(max(float(user_growth), 0.0), 0.60)
+            g = float(user_growth)
+            scenario_fcf_growth = max(min(g, 0.60), -0.60)
         else:
             scenario_fcf_growth = min(max(fcf_growth_fallback + fallback_growth_adj, 0.0), 0.15)
 
@@ -776,9 +780,23 @@ def run_scenarios(
         # Composite se počítá jen z původní sady modelů (ev_ebitda, dcf,
         # fcf_yield, roic_ep) — dcf_normalized je doplňkový pohled a
         # nesmí změnit composite cenu u firem, kde už dnes funguje správně.
+        #
+        # VÝJIMKA pro vysoce zadlužené firmy (high_leverage): klasický
+        # 'dcf' s Gordonovým modelem strukturálně podhodnocuje firmy kde
+        # net_debt je velký vůči EV — odečet celého dluhu najednou často
+        # dá zápornou cenu i při rozumném growth (viz PFE: net_debt 66B
+        # vs EV ~200-500B). 'dcf_short' řeší stejnou otázku (krátký
+        # horizont, exit na multiple) bez tohoto zkreslení, takže composite
+        # pro tyto firmy použije dcf_short namísto dcf — stejná váha (30 %),
+        # jen spolehlivější zdrojový model. Pro běžné (nezadlužené) firmy
+        # se composite chová identicky jako dřív.
         composite_keys = {"ev_ebitda", "dcf", "fcf_yield", "roic_ep"}
+        models_for_composite = dict(models_out)
+        if high_leverage and "dcf_short" in models_out and models_out["dcf_short"].get("price") is not None:
+            models_for_composite["dcf"] = models_out["dcf_short"]
+
         valid_models = [
-            m for k, m in models_out.items()
+            m for k, m in models_for_composite.items()
             if k in composite_keys and m and m.get("price") is not None
         ]
         comp              = composite_price(valid_models)
