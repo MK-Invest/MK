@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 
 import RsiHeatmap from "./RsiHeatmap";
@@ -114,7 +115,128 @@ function QChart({ data, dataKey, label, color = "#38BDF8" }) {
 // ─────────────────────────────────────────────────────────
 
 
-function ValuationModelsTable({ scenarios, price }) {
+// ─────────────────────────────────────────────────────────
+// VLASTNÍ RŮSTOVÉ PŘEDPOKLADY — bear/base/bull revenue_cagr
+// ─────────────────────────────────────────────────────────
+
+function GrowthInputsForm({ scenarios, onRecalculate, recalculating }) {
+  // Předvyplň aktuálními hodnotami (auto-odhad nebo dříve zadané),
+  // ať uživatel vidí od čeho vychází, ne prázdná pole.
+  const initial = (key) => {
+    const v = scenarios?.[key]?.revenue_cagr;
+    return v != null ? (v * 100).toFixed(1) : "";
+  };
+
+  const [bear, setBear] = useState(initial("bear"));
+  const [base, setBase] = useState(initial("base"));
+  const [bull, setBull] = useState(initial("bull"));
+
+  const parsePct = (s) => {
+    const n = parseFloat(String(s).replace(",", "."));
+    return Number.isFinite(n) ? n / 100 : null;
+  };
+
+  const handleCalculate = () => {
+    const overrides = {};
+    const b = parsePct(bear);
+    const ba = parsePct(base);
+    const bu = parsePct(bull);
+
+    if (b !== null) overrides.bear = { revenue_cagr: b };
+    if (ba !== null) overrides.base = { revenue_cagr: ba };
+    if (bu !== null) overrides.bull = { revenue_cagr: bu };
+
+    onRecalculate(overrides);
+  };
+
+  const inputStyle = {
+    width: 90,
+    padding: "6px 8px",
+    background: "#0F172A",
+    border: "1px solid #1E3A5F",
+    borderRadius: 6,
+    color: "#E2E8F0",
+    fontSize: 13,
+    fontFamily: "inherit",
+    outline: "none",
+  };
+
+  const labelStyle = {
+    fontSize: 11,
+    color: "#64748B",
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    marginBottom: 4,
+    display: "block",
+  };
+
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "flex-end",
+      gap: 16,
+      padding: "12px 12px 16px",
+      flexWrap: "wrap",
+    }}>
+      <div>
+        <label style={labelStyle}>Bear růst (%)</label>
+        <input
+          style={inputStyle}
+          type="text"
+          inputMode="decimal"
+          value={bear}
+          onChange={(e) => setBear(e.target.value)}
+          placeholder="např. 7"
+        />
+      </div>
+      <div>
+        <label style={labelStyle}>Base růst (%)</label>
+        <input
+          style={inputStyle}
+          type="text"
+          inputMode="decimal"
+          value={base}
+          onChange={(e) => setBase(e.target.value)}
+          placeholder="např. 10"
+        />
+      </div>
+      <div>
+        <label style={labelStyle}>Bull růst (%)</label>
+        <input
+          style={inputStyle}
+          type="text"
+          inputMode="decimal"
+          value={bull}
+          onChange={(e) => setBull(e.target.value)}
+          placeholder="např. 15"
+        />
+      </div>
+      <button
+        onClick={handleCalculate}
+        disabled={recalculating}
+        style={{
+          padding: "8px 18px",
+          background: recalculating ? "#1E293B" : "#1E3A5F",
+          border: "1px solid #2563EB",
+          borderRadius: 6,
+          color: recalculating ? "#64748B" : "#38BDF8",
+          fontSize: 13,
+          fontFamily: "inherit",
+          cursor: recalculating ? "default" : "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {recalculating ? "⟳ Počítám..." : "Calculate"}
+      </button>
+      <div style={{ fontSize: 11, color: "#475569", maxWidth: 280 }}>
+        Roční růst tržeb, který očekáváš pro daný scénář. Použije se konzistentně
+        pro EV/EBITDA i DCF model. Prázdné pole = automatický odhad z historie.
+      </div>
+    </div>
+  );
+}
+
+function ValuationModelsTable({ scenarios, price, onRecalculate, recalculating }) {
   if (!scenarios?.base) {
     return <div style={{ color: "#475569", padding: 12, fontSize: 12 }}>Valuation models not loaded</div>;
   }
@@ -150,6 +272,13 @@ function ValuationModelsTable({ scenarios, price }) {
 
   return (
     <>
+      {onRecalculate && (
+        <GrowthInputsForm
+          scenarios={scenarios}
+          onRecalculate={onRecalculate}
+          recalculating={recalculating}
+        />
+      )}
       <table style={S.table}>
         <thead>
           <tr>
@@ -205,7 +334,7 @@ function TrendRow({ label, value, note }) {
 // MAIN DASHBOARD
 // ─────────────────────────────────────────────────────────
 
-export function StockDashboard({ data }) {
+export function StockDashboard({ data, onRecalculate, recalculating }) {
   if (!data) return null;
 
   const f  = data.fundamentals ?? {};
@@ -330,7 +459,12 @@ export function StockDashboard({ data }) {
               </tbody>
             </table>
           </div>
-          <ValuationModelsTable scenarios={scenarios} price={price} />
+          <ValuationModelsTable
+            scenarios={scenarios}
+            price={price}
+            onRecalculate={onRecalculate}
+            recalculating={recalculating}
+          />
         </Section>
 
 <Section title="Vývoj kvartálních výsledků — grafy">

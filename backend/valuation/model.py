@@ -38,6 +38,16 @@ DCF se počítá ve dvou variantách (pokud jsou data dostupná):
   - "dcf"            : TTM FCF (standardní, citlivý na jednorázové výkyvy)
   - "dcf_normalized" : 3Y mediánový FCF (robustní vůči jednorázovým propadům/
                         windfall rokům — např. PFE post-COVID, akviziční dluh)
+
+RŮST (revenue_cagr) — uživatelem řízený vstup:
+  Uživatel zadává revenue_cagr zvlášť pro bear/base/bull scénář (přes
+  scenario_overrides). Toto číslo se použije KONZISTENTNĚ pro:
+    - EV/EBITDA forward revenue projekci
+    - DCF FCF growth (capped na 15 % — i agresivní firmy nerostou FCF
+      dlouhodobě rychleji, model by jinak divergoval)
+  Pokud uživatel growth nezadá, použije se automatický odhad z 5Y CAGR
+  (revenue/net income historie) jako fallback — ale to je záložní chování,
+  ne primární zdroj pravdy.
 """
 
 from __future__ import annotations
@@ -256,13 +266,18 @@ def model_dcf(
       Fáze 1: explicitní FCF projekce na `years` let
       Fáze 2: Gordonův model terminální hodnoty
 
-    fcf_growth = min(revenue_cagr_5y, net_income_cagr_5y, 0.15)
-    Pro mega_tech: fcf = cfo x 0.65 (normalizace growth CapEx)
+    fcf_growth: typicky uživatelův vstup (revenue_cagr per scénář) nebo
+    fallback z historických 5Y CAGR dat. Pro mega_tech: fcf = cfo x 0.65
+    (normalizace growth CapEx).
+
+    Interní safety cap 60 % chrání jen proti overflow/překlepu — legitimně
+    agresivní odhady (např. 30% meziroční růst z analytického reportu)
+    musí projít beze změny, model je nemá potichu ořezávat.
     """
     if not shares or shares <= 0 or fcf <= 0:
         return {"model": "dcf", "price": None, "confidence": 0.0}
 
-    fcf_g  = min(abs(fcf_growth), 0.35) * (1 if fcf_growth >= 0 else -1)
+    fcf_g  = min(abs(fcf_growth), 0.60) * (1 if fcf_growth >= 0 else -1)
     t_grow = min(terminal_growth, wacc - 0.005)
 
     pv_fcfs = 0.0
@@ -471,11 +486,14 @@ def run_scenarios(
         if fcf_margin_input and fcf_margin_input > 0 and revenue > 0:
             fcf = revenue * fcf_margin_input
 
-    # ── FCF growth: min(revenue_cagr_5y, net_income_cagr_5y, 0.15) ──
+    # ── FCF growth fallback (jen pokud uživatel nezadá vlastní revenue_cagr) ──
+    # Toto je ZÁLOŽNÍ odhad z historických dat. Pokud uživatel zadá vlastní
+    # revenue_cagr pro scénář (přes scenario_overrides), použije se TO číslo
+    # konzistentně pro EV/EBITDA i DCF — viz smyčka níže.
     revenue_cagr_5y    = _safe(input_data.get("revenue_cagr_5y"))
     net_income_cagr_5y = _safe(input_data.get("net_income_cagr_5y"))
     candidates         = [x for x in [revenue_cagr_5y, net_income_cagr_5y] if x is not None and x > 0]
-    fcf_growth_base    = min(*candidates, 0.15) if candidates else min(revenue_growth, 0.15)
+    fcf_growth_fallback = min(*candidates, 0.15) if candidates else 0.03
 
     # ── Detekce typu firmy + kalibrace ───────────────────────────────
     firm_type = detect_firm_type(revenue, ebitda_margin, revenue_growth)
@@ -535,31 +553,41 @@ def run_scenarios(
                 return default
             return float(v)
 
-        # ── Scénářové adjustmenty z profilu ──────────────────────────
+        # ── Scénářové adjustmenty z profilu (multiple/WACC/yield/margin) ──
+        # Tyto zůstávají firma-typ specifické (mega_tech/growth_saas/default).
+        # Growth (revenue_cagr) NENÍ součástí profilu — je to buď uživatelův
+        # vstup, nebo fallback z historických dat (viz níže).
         if scenario == "bear":
-            rev_adj        = profile["revenue_bear_adj"]
             margin_adj     = profile["margin_bear_adj"]
             multiple_adj   = profile["ev_ebitda_bear_adj"]
             wacc_adj       = profile["wacc_bear_adj"]
             yield_target   = profile["fcf_yield_bear"]
-            fcf_growth_adj = -0.03
+            fallback_growth_adj = -0.03   # fallback-only posun, pokud uživatel nezadal nic
         elif scenario == "bull":
-            rev_adj        = profile["revenue_bull_adj"]
             margin_adj     = profile["margin_bull_adj"]
             multiple_adj   = profile["ev_ebitda_bull_adj"]
             wacc_adj       = profile["wacc_bull_adj"]
             yield_target   = profile["fcf_yield_bull"]
-            fcf_growth_adj = +0.02
+            fallback_growth_adj = +0.02
         else:  # base
-            rev_adj        = 0.0
             margin_adj     = 0.0
             multiple_adj   = 0.0
             wacc_adj       = 0.0
             yield_target   = profile["fcf_yield_base"]
-            fcf_growth_adj = 0.0
+            fallback_growth_adj = 0.0
 
-        adj_growth   = _override("revenue_cagr",      revenue_growth + rev_adj)
-        adj_margin   = _override("ebitda_margin",      ebitda_margin  + margin_adj)
+        # ── RŮST: uživatelův vstup je jediný zdroj pravdy, pokud je zadaný ──
+        # scenario_overrides[scenario]["revenue_cagr"] — pokud uživatel zadá
+        # číslo (i 0% nebo záporné, pokud to explicitně chce), použije se
+        # PŘESNĚ to, konzistentně pro EV/EBITDA i DCF.
+        user_growth = override.get("revenue_cagr")
+        if user_growth is not None:
+            adj_growth = float(user_growth)
+        else:
+            # Fallback: žádný uživatelský vstup → historický odhad ± scénářový posun
+            adj_growth = revenue_growth + fallback_growth_adj
+
+        adj_margin   = _override("ebitda_margin", ebitda_margin + margin_adj)
         adj_margin   = max(adj_margin, 0.01)
 
         # EV/EBITDA multiple s floor podle profilu
@@ -580,9 +608,21 @@ def run_scenarios(
         if fcf_margin and fcf_margin > 0 and revenue > 0:
             scenario_fcf_3y = scenario_fcf  # override platí pro oba DCF varianty stejně
 
-        # FCF growth: konzervativní base ± scénářový adj, floor 0.0 — záporný
-        # growth dává nereálné výsledky pro stabilní firmy (viz PFE)
-        scenario_fcf_growth = min(max(fcf_growth_base + fcf_growth_adj, 0.0), 0.15)
+        # FCF growth pro DCF: STEJNÉ číslo jako adj_growth (uživatelův revenue_cagr).
+        #
+        # Uživatelův vstup: cap jen na 60 % jako pojistka proti overflow/překlepu
+        # (ne proti legitimně agresivním odhadům — pokud report čeká 30% meziroční
+        # růst, model to musí respektovat, ne potichu ořezávat na 15 %).
+        # Floor 0.0 — záporný FCF growth v 10letém DCF dává nereálné výsledky
+        # i pro firmy, kde uživatel čeká dočasný pokles (viz PFE bear case).
+        #
+        # Fallback odhad (bez uživatelského vstupu): cap 15 % zůstává — to je
+        # konzervativní pojistka pro automaticky odvozený růst z historických
+        # dat, kde nechceme, aby šumové 5Y CAGR vygenerovalo nereálné DCF.
+        if user_growth is not None:
+            scenario_fcf_growth = min(max(float(user_growth), 0.0), 0.60)
+        else:
+            scenario_fcf_growth = min(max(fcf_growth_fallback + fallback_growth_adj, 0.0), 0.15)
 
         # ── MODEL 1: EV/EBITDA ───────────────────────────────────────
         models_out["ev_ebitda"] = model_ev_ebitda(
@@ -659,6 +699,7 @@ def run_scenarios(
             "firm_type":            firm_type,
             "firm_profile":         profile["label"],
             "revenue_cagr":         adj_growth,
+            "growth_source":        "user" if user_growth is not None else "fallback",
             "ebitda_margin":        adj_margin,
             "ev_ebitda_multiple":   adj_multiple,
             "projected_revenue":    projected_revenue,

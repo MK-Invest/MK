@@ -5,38 +5,61 @@ import { StockDashboard } from "../components/StockDashboard";
 
 export default function Overview() {
   const [data, setData] = useState(null);
+  const [ticker, setTicker] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const [error, setError] = useState(null);
 
-  const loadStock = async (ticker) => {
+  const applyValuation = (company, valuation) => ({
+    ...company,
+    valuation: valuation?.valuation,
+    scenarios: valuation?.scenarios,
+    valuationHistorical: valuation?.historical,
+    valuationRating: valuation?.rating,
+    valuationRatingColor: valuation?.rating_color,
+    valuationRequiredReturn: valuation?.required_return,
+    valuationYears: valuation?.years,
+  });
+
+  const loadStock = async (newTicker) => {
     setLoading(true);
     setError(null);
     try {
       const [company, valuation] = await Promise.all([
-        getCompany(ticker),
-        getValuation(ticker),
+        getCompany(newTicker),
+        getValuation(newTicker),
       ]);
 
       if (company?.detail) {
-        setError(`Ticker nenalezen: ${ticker}`);
+        setError(`Ticker nenalezen: ${newTicker}`);
         setData(null);
+        setTicker(null);
       } else {
-        setData({
-          ...company,
-          valuation: valuation?.valuation,
-          scenarios: valuation?.scenarios,
-          valuationHistorical: valuation?.historical,
-          valuationRating: valuation?.rating,
-          valuationRatingColor: valuation?.rating_color,
-          valuationRequiredReturn: valuation?.required_return,
-          valuationYears: valuation?.years,
-        });
+        setData(applyValuation(company, valuation));
+        setTicker(newTicker);
       }
     } catch (e) {
       setError("Chyba při načítání dat.");
       setData(null);
+      setTicker(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Přepočet valuace se zachovanými fundamentals (company data),
+  // jen nové scénářové předpoklady (bear/base/bull revenue_cagr atd.)
+  const recalculate = async (overrides) => {
+    if (!ticker || !data) return;
+    setRecalculating(true);
+    setError(null);
+    try {
+      const valuation = await getValuation(ticker, overrides);
+      setData((prev) => applyValuation(prev, valuation));
+    } catch (e) {
+      setError("Chyba při přepočtu valuace.");
+    } finally {
+      setRecalculating(false);
     }
   };
 
@@ -107,7 +130,13 @@ export default function Overview() {
       )}
 
       {/* Dashboard */}
-      {data && !loading && <StockDashboard data={data} />}
+      {data && !loading && (
+        <StockDashboard
+          data={data}
+          onRecalculate={recalculate}
+          recalculating={recalculating}
+        />
+      )}
 
     </div>
   );
