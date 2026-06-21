@@ -1,18 +1,17 @@
 import { useState, useRef, useEffect } from "react";
 
-const BASE_URL = "http://localhost:8000";
+const BASE_URL = "https://mk-m01x.onrender.com";
 
 export default function SearchBar({ onSearch }) {
-  const [query,   setQuery]   = useState("");
+  const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [open,    setOpen]    = useState(false);
+  const [open, setOpen] = useState(false);
+
   const debounceRef = useRef(null);
-  const wrapRef     = useRef(null);
+  const wrapRef = useRef(null);
 
-  console.log("SEARCHBAR MOUNTED");
-
-  // Zavři dropdown při kliknutí mimo
+  // Zavření dropdownu při kliknutí mimo
   useEffect(() => {
     const handler = (e) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target)) {
@@ -23,7 +22,7 @@ export default function SearchBar({ onSearch }) {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Debounce search při psaní
+  // Debounced search
   const handleChange = (e) => {
     const val = e.target.value;
     setQuery(val);
@@ -38,12 +37,38 @@ export default function SearchBar({ onSearch }) {
 
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
+
       try {
-        const res  = await fetch(`${BASE_URL}/search?query=${encodeURIComponent(val.trim())}`);
+        const res = await fetch(
+          `${BASE_URL}/search?query=${encodeURIComponent(val.trim())}`
+        );
         const data = await res.json();
-        setResults(Array.isArray(data) ? data : []);
+
+        // 🔥 DEDUPE: 1 ticker = 1 výsledek (NASDAQ priorita)
+        const map = new Map();
+
+        (Array.isArray(data) ? data : []).forEach((item) => {
+          const key = item.symbol;
+
+          if (!map.has(key)) {
+            map.set(key, item);
+          } else {
+            // preferuj NASDAQ (nebo US listing)
+            const existing = map.get(key);
+
+            const score = (x) =>
+              (x.exchange === "NASDAQ" ? 3 : 0) +
+              (x.market === "United States" ? 2 : 0);
+
+            if (score(item) > score(existing)) {
+              map.set(key, item);
+            }
+          }
+        });
+
+        setResults(Array.from(map.values()));
         setOpen(true);
-      } catch {
+      } catch (err) {
         setResults([]);
       } finally {
         setLoading(false);
@@ -56,15 +81,13 @@ export default function SearchBar({ onSearch }) {
     setQuery(ticker);
     setResults([]);
     setOpen(false);
-    console.log("SEARCH VALUE:", ticker);
     onSearch(ticker);
   };
 
   const handleSubmit = () => {
     const val = query.trim().toUpperCase();
     if (!val) return;
-    console.log("BUTTON CLICKED");
-    console.log("SEARCH VALUE:", val);
+
     setOpen(false);
     onSearch(val);
   };
@@ -75,15 +98,23 @@ export default function SearchBar({ onSearch }) {
   };
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", display: "flex", gap: 8, flex: 1, maxWidth: 480 }}>
-
+    <div
+      ref={wrapRef}
+      style={{
+        position: "relative",
+        display: "flex",
+        gap: 8,
+        flex: 1,
+        maxWidth: 480,
+      }}
+    >
       <div style={{ position: "relative", flex: 1 }}>
         <input
           value={query}
           onChange={handleChange}
           onKeyDown={handleKey}
           onFocus={() => results.length > 0 && setOpen(true)}
-          placeholder="Ticker nebo název firmy (AAPL, ASML.AS, Apple...)"
+          placeholder="Ticker nebo název firmy (AAPL, Apple...)"
           style={{
             width: "100%",
             padding: "8px 12px",
@@ -98,65 +129,82 @@ export default function SearchBar({ onSearch }) {
           }}
         />
 
-        {/* Dropdown výsledků */}
+        {/* DROPDOWN */}
         {open && results.length > 0 && (
-          <div style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            right: 0,
-            background: "#0F172A",
-            border: "1px solid #1E3A5F",
-            borderRadius: 6,
-            zIndex: 1000,
-            maxHeight: 320,
-            overflowY: "auto",
-          }}>
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 4px)",
+              left: 0,
+              right: 0,
+              background: "#0F172A",
+              border: "1px solid #1E3A5F",
+              borderRadius: 6,
+              zIndex: 1000,
+              maxHeight: 320,
+              overflowY: "auto",
+            }}
+          >
             {results.map((item, i) => (
               <div
-                key={i}
+                key={`${item.symbol}-${item.exchange}-${i}`}
                 onClick={() => handleSelect(item)}
                 style={{
                   padding: "10px 14px",
                   cursor: "pointer",
-                  borderBottom: i < results.length - 1 ? "1px solid #1E293B" : "none",
+                  borderBottom:
+                    i < results.length - 1 ? "1px solid #1E293B" : "none",
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
                   gap: 8,
                 }}
-                onMouseEnter={e => e.currentTarget.style.background = "#1E293B"}
-                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "#1E293B")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = "transparent")
+                }
               >
-                {/* Levá část — ticker + název */}
+                {/* LEFT */}
                 <div>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#38BDF8", fontFamily: "monospace" }}>
+                  <span
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#38BDF8",
+                      fontFamily: "monospace",
+                    }}
+                  >
                     {item.symbol}
                   </span>
-                  {item.name && item.name !== item.symbol && (
-                    <span style={{ fontSize: 12, color: "#94A3B8", marginLeft: 8 }}>
+
+                  {item.name && (
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "#94A3B8",
+                        marginLeft: 8,
+                      }}
+                    >
                       {item.name}
                     </span>
                   )}
                 </div>
 
-                {/* Pravá část — burza + trh */}
+                {/* RIGHT */}
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
                   {item.exchange && (
-                    <span style={{
-                      fontSize: 11,
-                      background: "#1E3A5F",
-                      color: "#7DD3FC",
-                      padding: "2px 6px",
-                      borderRadius: 3,
-                      marginLeft: 4,
-                    }}>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        background: "#1E3A5F",
+                        color: "#7DD3FC",
+                        padding: "2px 6px",
+                        borderRadius: 3,
+                      }}
+                    >
                       {item.exchange}
-                    </span>
-                  )}
-                  {item.market && (
-                    <span style={{ fontSize: 11, color: "#475569", marginLeft: 6 }}>
-                      {item.market}
                     </span>
                   )}
                 </div>
@@ -184,14 +232,16 @@ export default function SearchBar({ onSearch }) {
       </button>
 
       {loading && (
-        <div style={{
-          position: "absolute",
-          right: 80,
-          top: "50%",
-          transform: "translateY(-50%)",
-          fontSize: 11,
-          color: "#475569",
-        }}>
+        <div
+          style={{
+            position: "absolute",
+            right: 80,
+            top: "50%",
+            transform: "translateY(-50%)",
+            fontSize: 11,
+            color: "#475569",
+          }}
+        >
           ⟳
         </div>
       )}
