@@ -455,6 +455,8 @@ export function StockDashboard({ data, onRecalculate, recalculating }) {
                 <Row label="Required return" value={fmtPct(data.valuationRequiredReturn)} />
                 <Row label="Horizon" value={data.valuationYears ? `${data.valuationYears} roky` : "-"} />
                 <Row label="Hist. revenue CAGR" value={fmtPct(valuationHistorical.hist_cagr)} />
+                <Row label="Hist. EPS CAGR (2Y)" value={fmtPct(f.eps_cagr_2y)} />
+                <Row label="Hist. FCF CAGR (2Y)" value={fmtPct(f.fcf_cagr_2y)} />
               </tbody>
             </table>
             <table style={S.table}>

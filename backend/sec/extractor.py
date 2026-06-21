@@ -9,7 +9,7 @@ from .timeseries import (
     pick_first_existing,
     extract_latest_annual_series,
 )
-from .metrics import compute_ttm, compute_cagr_5y, compute_fcf_median
+from .metrics import compute_ttm, compute_cagr_5y, compute_cagr_2y, compute_fcf_median
 
 
 def select_best(items):
@@ -106,6 +106,52 @@ def extract_eps_quarterly(gaap, shares):
     return [{"end": q["end"], "eps": q["val"] / shares} for q in ni[:4] if q.get("val")]
 
 
+def extract_fcf_quarterly_series(gaap, n=12):
+    """
+    Vrátí kvartální FCF sérii (CFO - CapEx per kvartál), DESC pořadí.
+    Na rozdíl od extract_fcf_annual_history (roční, pro medián) tahle
+    funkce dává kvartální body pro CAGR výpočet na kratším okně (2Y).
+
+    Páruje CFO a CapEx podle 'end' data — pokud pro daný kvartál chybí
+    jeden z páru, kvartál se přeskočí (raději méně bodů než špatný pár).
+    """
+    cfo   = pick_first_existing(gaap, [
+        "NetCashProvidedByOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivities",
+    ], n=n)
+    capex = pick_first_existing(gaap, [
+        "CapitalExpenditures",
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PurchaseOfPropertyPlantAndEquipmentNet",
+        "PaymentsToAcquireProductiveAssets",
+    ], n=n)
+
+    capex_by_end = {c["end"]: c["val"] for c in capex}
+
+    result = []
+    for c in cfo:
+        capex_val = capex_by_end.get(c["end"])
+        if capex_val is None:
+            continue
+        result.append({"end": c["end"], "val": c["val"] - abs(capex_val)})
+
+    return result
+
+
+def extract_eps_series(net_income, shares):
+    """
+    Odvodí kvartální EPS sérii z existující net_income historie (DESC).
+    Nevyžaduje samostatnou GAAP extrakci — EPS = net_income / shares,
+    počítané ze stejných kvartálních bodů, co už máme.
+    """
+    if not net_income or not shares:
+        return []
+    return [
+        {"end": q["end"], "val": q["val"] / shares}
+        for q in net_income if q.get("val") is not None
+    ]
+
+
 def extract_fcf_annual_history(gaap, years=3):
     """
     Vrátí roční FCF historii (CFO - CapEx) za posledních N fiskálních let,
@@ -198,6 +244,16 @@ def extract_fundamentals(data):
     revenue_cagr_5y    = compute_cagr_5y(revenue)
     net_income_cagr_5y = compute_cagr_5y(net_income)
 
+    # EPS a FCF CAGR — kratší 2Y okno, doplňuje revenue_cagr_5y o kontext:
+    # pokud revenue klesá ale EPS/FCF roste, jde o zlepšující se efektivitu/
+    # marže (např. restrukturalizace), ne čistý fundamentální propad.
+    # 2Y okno místo 5Y, aby nebylo zkreslené starou restrukturalizací/
+    # spin-offem (stejný problém jaký řešil revenue_cagr_5y u MMM/3M).
+    eps_series      = extract_eps_series(net_income, shares)
+    fcf_q_series    = extract_fcf_quarterly_series(gaap)
+    eps_cagr_2y     = compute_cagr_2y(eps_series)
+    fcf_cagr_2y     = compute_cagr_2y(fcf_q_series)
+
     depreciation = pick_first_existing(gaap, [
         "DepreciationAndAmortization",
         "DepreciationDepletionAndAmortization",
@@ -226,6 +282,8 @@ def extract_fundamentals(data):
         "cfo":                extract_cfo(gaap),
         "revenue_cagr_5y":    revenue_cagr_5y,
         "net_income_cagr_5y": net_income_cagr_5y,
+        "eps_cagr_2y":        eps_cagr_2y,
+        "fcf_cagr_2y":        fcf_cagr_2y,
         "fcf_3y_median":      fcf_3y_median,
         "fcf_annual_history": fcf_annual_history,
         "source":             "sec",
