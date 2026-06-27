@@ -280,6 +280,8 @@ function ValuationModelsTable({ scenarios, price, onRecalculate, recalculating }
     { key: "dcf_normalized", label: "DCF (3Y median)" },
     { key: "fcf_yield", label: "FCF Yield" },
     { key: "roic_ep", label: "ROIC / EP" },
+    { key: "pe_exit",   label: "P/E Exit" },
+    { key: "pfcf_exit", label: "P/FCF Exit" },
   ];
   const scenarioKeys = ["bear", "base", "bull"];
 

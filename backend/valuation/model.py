@@ -219,12 +219,29 @@ def model_ev_ebitda(
     shares: float,
     revenue_growth: float = 0.0,
     years: int = 3,
+    wacc: float = 0.10,
 ) -> dict:
     """
-    Forward EV/EBITDA model.
-    price = (EBITDA_forward x multiple - net_debt) / shares
+    Forward EV/EBITDA model s diskontováním exit hodnoty zpět k dnešku.
 
-    Odpovídá na otázku: "Za kolik trh ocení firmu za N let při tomto růstu?"
+    Dvě fáze:
+      1. Projekce: EBITDA_exit = revenue × (1+g)^N × margin
+                   exit_equity = EBITDA_exit × multiple - net_debt
+                   exit_price  = exit_equity / shares  (cena za N let)
+      2. Diskontování: pv_price = exit_price / (1 + wacc)^N  (dnešní PV)
+
+    KLÍČOVÝ ROZDÍL oproti původní verzi:
+      Původní 'price' byla exit cena za N let — nešla přímo porovnávat
+      s aktuální cenou akcie bez dalšího kroku. Investoři kupují DNES,
+      takže potřebují PV (kolik exit stojí dnes při požadovaném výnosu).
+
+      'exit_price' zůstává v outputu pro transparentnost (a frontend
+      ji zobrazuje jako 'required_cagr' pohled — jak rychle musím
+      cena růst od dneška k exit hodnotě).
+
+    Odpovídá na otázku: "Kolik je firma férově oceněná DNES, pokud za
+    N let bude obchodovat na daném multiple při tomto growth a já chci
+    ročně vydělat WACC%?"
     """
     if not shares or shares <= 0:
         return {"model": "ev_ebitda", "price": None, "confidence": 0.0}
@@ -234,17 +251,25 @@ def model_ev_ebitda(
     if ebitda is None or ebitda <= 0:
         return {"model": "ev_ebitda", "price": None, "confidence": 0.0}
 
-    ev     = ebitda * ev_ebitda_multiple
-    equity = ev - net_debt
-    price  = _safe(equity / shares)
+    ev          = ebitda * ev_ebitda_multiple
+    equity      = ev - net_debt
+    exit_price  = _safe(equity / shares)
+
+    # Diskontuj exit hodnotu zpět k dnešku přes WACC
+    discount    = (1 + wacc) ** years
+    pv_price    = _safe(exit_price / discount) if exit_price is not None else None
 
     return {
-        "model":      "ev_ebitda",
-        "price":      price,
-        "ebitda":     ebitda,
-        "ev":         ev,
-        "equity":     equity,
-        "confidence": 0.55,
+        "model":            "ev_ebitda",
+        "price":            pv_price,       # ← PV k dnešku — srovnatelné s aktuální cenou
+        "exit_price":       exit_price,     # ← cena za N let (pro required_cagr výpočet)
+        "ebitda":           ebitda,
+        "ev":               ev,
+        "equity":           equity,
+        "wacc":             wacc,
+        "years":            years,
+        "discount_factor":  discount,
+        "confidence":       0.55,
     }
 
 
@@ -422,9 +447,138 @@ def model_fcf_yield(
     }
 
 
+
 # =========================================================
-# MODEL 4 — ROIC / Economic Profit
+# MODEL 5 — P/E EXIT  (exit hodnota přes čistý zisk)
 # =========================================================
+
+def model_pe_exit(
+    revenue: float,
+    net_margin: float,
+    pe_multiple: float,
+    net_debt: float,
+    shares: float,
+    revenue_growth: float = 0.0,
+    years: int = 3,
+    wacc: float = 0.10,
+) -> dict:
+    """
+    P/E exit model — projektuje čistý zisk za N let a ocení ho P/E multiplem.
+    Výsledná exit market cap se diskontuje zpět k dnešku přes WACC.
+
+    Logika:
+      net_income_exit = revenue × (1+g)^N × net_margin
+      exit_mc         = net_income_exit × pe_multiple
+      exit_equity     = exit_mc - net_debt
+      exit_price      = exit_equity / shares
+      pv_price        = exit_price / (1 + wacc)^N
+
+    Vhodný primárně pro:
+      - profitabilní growth firmy (tech, SaaS) kde P/E je primární kotva
+      - firmy kde EV/EBITDA je méně spolehlivý (high D&A, leasing adjustments)
+
+    Méně vhodný pro:
+      - firmy se záporným nebo volatilním čistým ziskem (cyclicals, turnarounds)
+      - firmy s velkými jednorázovými položkami (M&A write-offs jako PFE 2023)
+    """
+    if not shares or shares <= 0 or net_margin <= 0 or pe_multiple <= 0:
+        return {"model": "pe_exit", "price": None, "confidence": 0.0}
+
+    rev_forward      = revenue * ((1 + revenue_growth) ** years)
+    net_income_exit  = _safe(rev_forward * net_margin)
+    if net_income_exit is None or net_income_exit <= 0:
+        return {"model": "pe_exit", "price": None, "confidence": 0.0}
+
+    exit_mc    = net_income_exit * pe_multiple
+    exit_eq    = exit_mc - net_debt
+    exit_price = _safe(exit_eq / shares)
+
+    discount   = (1 + wacc) ** years
+    pv_price   = _safe(exit_price / discount) if exit_price is not None else None
+
+    confidence = 0.60 if net_margin > 0.05 else 0.35
+
+    return {
+        "model":             "pe_exit",
+        "price":             pv_price,
+        "exit_price":        exit_price,
+        "net_income_exit":   net_income_exit,
+        "exit_mc":           exit_mc,
+        "net_margin":        net_margin,
+        "pe_multiple":       pe_multiple,
+        "wacc":              wacc,
+        "years":             years,
+        "confidence":        confidence,
+    }
+
+
+# =========================================================
+# MODEL 6 — P/FCF EXIT  (exit hodnota přes free cash flow)
+# =========================================================
+
+def model_pfcf_exit(
+    revenue: float,
+    fcf_margin: float,
+    pfcf_multiple: float,
+    net_debt: float,
+    shares: float,
+    revenue_growth: float = 0.0,
+    years: int = 3,
+    wacc: float = 0.10,
+) -> dict:
+    """
+    P/FCF exit model — projektuje FCF za N let a ocení ho P/FCF multiplem.
+    Výsledná exit market cap se diskontuje zpět k dnešku přes WACC.
+
+    Logika:
+      fcf_exit    = revenue × (1+g)^N × fcf_margin
+      exit_mc     = fcf_exit × pfcf_multiple
+      exit_equity = exit_mc - net_debt
+      exit_price  = exit_equity / shares
+      pv_price    = exit_price / (1 + wacc)^N
+
+    Rozdíl od model_fcf_yield:
+      fcf_yield bere TTM FCF staticky (bez growth projekce) a dělí
+      target yieldem → jednoduchá statická kotva "je akcie drahá dnes?"
+      pfcf_exit projektuje FCF do budoucna a diskontuje zpět → dynamická
+      forward-looking metrika (stejná logika jako EV/EBITDA exit model).
+
+    Vhodný primárně pro:
+      - FCF-generující growth firmy (mega-cap tech, SaaS se zralou marží)
+      - firmy kde FCF > čistý zisk (D&A efekt, CapEx lehké byznysy)
+      - jako cross-check k EV/EBITDA (obě metodologie by měly dát podobný výsledek)
+    """
+    if not shares or shares <= 0 or fcf_margin <= 0 or pfcf_multiple <= 0:
+        return {"model": "pfcf_exit", "price": None, "confidence": 0.0}
+
+    rev_forward = revenue * ((1 + revenue_growth) ** years)
+    fcf_exit    = _safe(rev_forward * fcf_margin)
+    if fcf_exit is None or fcf_exit <= 0:
+        return {"model": "pfcf_exit", "price": None, "confidence": 0.0}
+
+    exit_mc    = fcf_exit * pfcf_multiple
+    exit_eq    = exit_mc - net_debt
+    exit_price = _safe(exit_eq / shares)
+
+    discount   = (1 + wacc) ** years
+    pv_price   = _safe(exit_price / discount) if exit_price is not None else None
+
+    confidence = 0.65 if fcf_margin > 0.05 else 0.35
+
+    return {
+        "model":          "pfcf_exit",
+        "price":          pv_price,
+        "exit_price":     exit_price,
+        "fcf_exit":       fcf_exit,
+        "exit_mc":        exit_mc,
+        "fcf_margin":     fcf_margin,
+        "pfcf_multiple":  pfcf_multiple,
+        "wacc":           wacc,
+        "years":          years,
+        "confidence":     confidence,
+    }
+
+
 
 def model_roic_ep(
     nopat: float,
@@ -483,10 +637,12 @@ def model_roic_ep(
 # =========================================================
 
 MODEL_WEIGHTS = {
-    "ev_ebitda": 0.50,
-    "dcf":       0.30,
-    "fcf_yield": 0.20,
-    "roic_ep":   0.40,
+    "ev_ebitda":  0.50,
+    "dcf":        0.30,
+    "fcf_yield":  0.20,
+    "roic_ep":    0.40,
+    "pe_exit":    0.35,   # P/E exit — spolehlivý pro profitabilní firmy
+    "pfcf_exit":  0.40,   # P/FCF exit — nejčistší cash-based exit model
 }
 
 
@@ -549,8 +705,30 @@ def run_scenarios(
     revenue_growth = float(input_data.get("revenue_growth") or 0.05)
     nopat          = _safe(input_data.get("nopat"))
     roic           = _safe(input_data.get("roic"))
-    cfo            = _safe(input_data.get("cfo"))   # nový vstup z sec.extract_cfo
-    fcf_3y_median  = _safe(input_data.get("fcf_3y_median"))  # nový vstup, robustní FCF
+    cfo            = _safe(input_data.get("cfo"))
+    fcf_3y_median  = _safe(input_data.get("fcf_3y_median"))
+
+    # P/E exit model — net marže z dat (net_income / revenue)
+    net_income_ttm = _safe(input_data.get("net_income"))
+    net_margin_base = (net_income_ttm / revenue) if (net_income_ttm and revenue > 0) else None
+
+    # P/FCF exit model — FCF marže z dat (fcf / revenue)
+    fcf_raw = _safe(input_data.get("fcf"))
+    pfcf_margin_base = (fcf_raw / revenue) if (fcf_raw and revenue > 0) else None
+
+    # P/E a P/FCF múltiples — odvozené z TTM tržních metrik
+    # ev_ebitda_multiple je dostupné z input_data, PE/PFCF musíme odvodit
+    # z market_cap (price × shares) pokud jsou k dispozici, jinak sektorové defaulty
+    price_per_share = _safe(input_data.get("price"))
+    mc = price_per_share * float(shares_raw) if price_per_share else None
+    pe_multiple_base  = (mc / net_income_ttm) if (mc and net_income_ttm and net_income_ttm > 0) else None
+    pfcf_multiple_base = (mc / fcf_raw) if (mc and fcf_raw and fcf_raw > 0) else None
+
+    # Sanitace — extrémní multiples (>200) jsou nesmyslné pro projekci
+    if pe_multiple_base and (pe_multiple_base > 200 or pe_multiple_base < 0):
+        pe_multiple_base = None
+    if pfcf_multiple_base and (pfcf_multiple_base > 200 or pfcf_multiple_base < 0):
+        pfcf_multiple_base = None
 
     # ── FCF vstup ────────────────────────────────────────────────────
     fcf = _safe(input_data.get("fcf"))
@@ -710,6 +888,7 @@ def run_scenarios(
             shares=shares,
             revenue_growth=adj_growth,
             years=years,
+            wacc=adj_wacc,
         )
 
         # ── MODEL 2 + 3: DCF + FCF Yield ────────────────────────────
@@ -777,6 +956,46 @@ def run_scenarios(
                 years=years,
             )
 
+        # ── MODEL 5: P/E EXIT ────────────────────────────────────────
+        # Scénářová marže — zachovává stejný poměr změny jako EBITDA margin adj
+        # (přibližná heuristika: čistá marže se mění podobně jako EBITDA marže)
+        if net_margin_base is not None and net_margin_base > 0:
+            margin_delta = adj_margin - ebitda_margin   # jak moc se marže posouvá v daném scénáři
+            adj_net_margin = max(net_margin_base + margin_delta * 0.5, 0.01)
+
+            # P/E multiple — scénářový posun stejně jako EV/EBITDA multiple
+            if pe_multiple_base is not None:
+                adj_pe = max(pe_multiple_base * (1 + multiple_adj), 1.0)
+                models_out["pe_exit"] = model_pe_exit(
+                    revenue=revenue,
+                    net_margin=adj_net_margin,
+                    pe_multiple=adj_pe,
+                    net_debt=net_debt,
+                    shares=shares,
+                    revenue_growth=adj_growth,
+                    years=years,
+                    wacc=adj_wacc,
+                )
+
+        # ── MODEL 6: P/FCF EXIT ──────────────────────────────────────
+        if pfcf_margin_base is not None and pfcf_margin_base > 0:
+            # FCF marže — mírně konzervativnější posun než EBITDA (FCF je volatilnější)
+            margin_delta = adj_margin - ebitda_margin
+            adj_pfcf_margin = max(pfcf_margin_base + margin_delta * 0.4, 0.01)
+
+            if pfcf_multiple_base is not None:
+                adj_pfcf = max(pfcf_multiple_base * (1 + multiple_adj), 1.0)
+                models_out["pfcf_exit"] = model_pfcf_exit(
+                    revenue=revenue,
+                    fcf_margin=adj_pfcf_margin,
+                    pfcf_multiple=adj_pfcf,
+                    net_debt=net_debt,
+                    shares=shares,
+                    revenue_growth=adj_growth,
+                    years=years,
+                    wacc=adj_wacc,
+                )
+
         # Composite se počítá jen z původní sady modelů (ev_ebitda, dcf,
         # fcf_yield, roic_ep) — dcf_normalized je doplňkový pohled a
         # nesmí změnit composite cenu u firem, kde už dnes funguje správně.
@@ -790,7 +1009,7 @@ def run_scenarios(
         # pro tyto firmy použije dcf_short namísto dcf — stejná váha (30 %),
         # jen spolehlivější zdrojový model. Pro běžné (nezadlužené) firmy
         # se composite chová identicky jako dřív.
-        composite_keys = {"ev_ebitda", "dcf", "fcf_yield", "roic_ep"}
+        composite_keys = {"ev_ebitda", "dcf", "fcf_yield", "roic_ep", "pe_exit", "pfcf_exit"}
         models_for_composite = dict(models_out)
         if high_leverage and "dcf_short" in models_out and models_out["dcf_short"].get("price") is not None:
             models_for_composite["dcf"] = models_out["dcf_short"]
@@ -814,7 +1033,10 @@ def run_scenarios(
             "projected_revenue":    projected_revenue,
             "projected_ebitda":     ev_model.get("ebitda"),
             "exit_ev":              ev_model.get("ev"),
-            "exit_price_per_share": ev_model.get("price"),
+            # exit_price_per_share = nediskontovaná cena za N let (pro required_cagr v main.py)
+            "exit_price_per_share": ev_model.get("exit_price"),
+            # pv_price = diskontovaná PV k dnešku — srovnatelná s aktuální cenou
+            "pv_price":             ev_model.get("price"),
             "models":               models_out,
             "composite":            comp,
             "price":                comp["price"],

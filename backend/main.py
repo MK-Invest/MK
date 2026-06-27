@@ -590,6 +590,8 @@ async def valuation(ticker: str, body: ValuationRequest):
         "nopat":             d.get("nopat"),
         "roic":              d.get("roic"),
         "cfo": d.get("cfo"),
+        "price":      price,                    # ← nové, pro P/E a P/FCF multiple výpočet
+        "net_income": d.get("net_income"),
         "revenue_growth":    base_override.get("revenue_cagr") or derived_growth,
         "revenue_cagr_5y":    d.get("revenue_cagr_5y"),
         "net_income_cagr_5y": d.get("net_income_cagr_5y"),
